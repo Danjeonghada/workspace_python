@@ -1,0 +1,14 @@
+2025-03-12 17:01:13,904 - job_get_coin - INFO - coin_scheduler 시작
+2025-03-12 17:11:14,414 - job_get_coin - INFO - coin_scheduler 시작
+2025-03-12 17:21:14,425 - job_get_coin - INFO - 코인 데이터 저장 시작
+2025-03-12 17:21:14,427 - job_get_coin - ERROR - 에러 발생!:module 'coin' has no attribute 'get_coin'
+2025-03-12 17:21:14,427 - job_get_coin - INFO - 저장 완료!!
+2025-03-12 17:31:14,420 - job_get_coin - INFO - 코인 데이터 저장 시작
+2025-03-12 17:31:14,431 - job_get_coin - ERROR - 에러 발생!:module 'coin' has no attribute 'get_coin'
+2025-03-12 17:31:14,432 - job_get_coin - INFO - 저장 완료!!
+2025-03-12 17:41:14,421 - job_get_coin - INFO - 코인 데이터 저장 시작
+2025-03-12 17:41:14,421 - job_get_coin - ERROR - 에러 발생!:module 'coin' has no attribute 'get_coin'
+2025-03-12 17:41:14,421 - job_get_coin - INFO - 저장 완료!!
+2025-03-13 12:40:11,652 - job_get_coin - INFO - coin_scheduler 시작
+2025-03-13 12:50:11,670 - job_get_coin - INFO - 코인 데이터 저장 시작
+2025-03-13 12:50:36,991 - job_get_coin - INFO - 저장 완료!!
