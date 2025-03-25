@@ -1,0 +1,12 @@
+{% extends 'top.html' %}
+{% block content %}
+<table class="table table-hover">
+    {% for v in coins %}
+    <tr>
+        <td>{{v.korean_name}}</td>
+        <td>{{v.english_name}}</td>
+        <td>{{v.market}}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endblock %}
