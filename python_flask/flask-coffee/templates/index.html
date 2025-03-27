@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <script src="https://code.jquery.com/jquery-3.7.1.js"></script>
+</head>
+<body>
+    <h1>coffee sales prediction</h1>
+    <form id="weatherForm">
+        <label>temperature:</label>
+        <input id="temperature" required><br>
+        <label>humidity:</label>
+        <input id="humidity" required><br>
+        <label>precipitation:</label>
+        <input id="precipitation" required><br>
+        <button type="submit"> 예측! </button>
+    </form>
+    <h2 id="result"></h2>
+    <script>
+        $("#weatherForm").on('submit', function(e){
+            e.preventDefault();
+            $.ajax({
+                url : '/predict'
+               ,type : 'POST'
+               ,data : { temperature: $("#temperature").val()
+                        ,humidity:$("#humidity").val()
+                        ,precipitation:$("#precipitation").val()
+               }
+               , success:function(res){
+                    console.log(res);
+                    $("#result").html(
+                        `<strong>오늘의 예상 판매량</strong><br>
+                        아이스 아메리카노 :${res.iced_ame.toFixed(1)}잔 <br>
+                        할 아메리카노 : ${res.hot_ame.toFixed(1)}잔 <br>
+                        빙수 : ${res.shaved_ice.toFixed(1)} 개`
+                    );
+               },error:function(e){
+                    console.log(e);
+               }
+            });
+        });
+
+    </script>
+</body>
+</html>

@@ -3,7 +3,6 @@ import requests
 # data = {"COMM_CD":"JB10"
 #        ,"COMM_NM":"IT"
 #        ,"COMM_PARENT":"JB00"}
-#
 # res = requests.post("http://localhost:5000/codes", json=data)
 # print("post 응답:", res.json())
 
