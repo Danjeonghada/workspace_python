@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Camera Detection</title>
+    <script src="https://code.jquery.com/jquery-3.7.1.js"></script>
+</head>
+<body>
+    <h2>Live Camera Object Detection</h2>
+    <video id="video" autoplay width="640" height="480"></video>
+    <canvas id="canvas" width="640" height="480" style="display: none;"></canvas>
+    <img src="" id="resultImage" alt="">
+    <div id="controls">
+        <button id="startBtn">start detection</button>
+        <button id="stopBtn">stop detection</button>
+    </div>
+
+    <script>
+        $(document).ready(function () {
+            let video = document.getElementById("video");
+            let canvas = document.getElementById("canvas");
+            let context = canvas.getContext("2d");
+            let resultImg = document.getElementById("resultImage");
+            let detectionInterval;
+
+            // 웹캠 연결
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(function (stream) {
+                    video.srcObject = stream;
+                })
+                .catch(function (e) {
+                    console.log('Webcam error:', e);
+                });
+
+            // 시작 버튼
+            $("#startBtn").click(function () {
+                detectionInterval = setInterval(captureFrame, 1000); // 1초 간격
+            });
+
+            // 정지 버튼
+            $("#stopBtn").click(function () {
+                clearInterval(detectionInterval);
+            });
+
+            // 프레임 캡처 및 서버 전송
+            function captureFrame() {
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                let dataUrl = canvas.toDataURL("image/jpeg");
+                $.ajax({
+                    type: "POST",
+                    url: "/analyze_frame",
+                    data: { image: dataUrl },
+                    success: function (res) {
+                        if (res.result_image) {
+                            resultImg.src = res.result_image;
+                        }
+                    },
+                    error: function (err) {
+                        console.log("Server error:", err);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
