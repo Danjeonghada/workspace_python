@@ -4,7 +4,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import UnexpectedAlertPresentException, NoAlertPresentException, TimeoutException
+from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 from datetime import datetime
 import time
@@ -12,7 +12,7 @@ import time
 # Oracle 연결 정보
 username = 'dan'
 password = 'dan'
-dsn = 'localhost:1521/xe'
+dsn = '192.168.219.106'
 
 # 셀레니움 설정
 options = Options()
@@ -27,6 +27,10 @@ cursor = conn.cursor()
 # player_cards 테이블에서 모든 card_id 가져오기
 cursor.execute("SELECT card_id FROM player_cards")
 card_ids = [row[0] for row in cursor.fetchall()]
+
+# 배치 크기 설정 (100개씩 커밋)
+batch_size = 100
+batch_count = 0
 
 for card_id in card_ids:
     player_id = str(card_id % 1_000_000)
@@ -83,19 +87,33 @@ for card_id in card_ids:
                 WHERE player_id = :player_id
             """, {
                 'player_id': player_id,
-                'birth_date': birth_date,
+                'birth_date': birth_date if birth_date else None,
                 'nation_id': nation_id
             })
+            batch_count += 1
             print(f"✔ 업데이트됨: player_id={player_id}, birth={birth_date}, nation={nation_name} → id={nation_id}")
         else:
             print(f"⚠ player_id={player_id} 없음 → 생략")
+
+        # 100개마다 커밋
+        if batch_count == batch_size:
+            conn.commit()
+            print(f"✅ {batch_size}개의 데이터 커밋 완료")
+            batch_count = 0  # 배치 카운트 초기화
 
     except Exception as e:
         print(f"❌ 예외 발생(card_id={card_id}): {e}")
         continue
 
-conn.commit()
+# 최종적으로 커밋되지 않은 데이터가 있다면 커밋
+if batch_count > 0:
+    conn.commit()
+    print(f"✅ 나머지 {batch_count}개의 데이터 커밋 완료")
+
 cursor.close()
 conn.close()
 driver.quit()
-print("✅ 전체 players 테이블 업데이트 완료")
+print("✅ 전체 업데이트 완료")
+
+# 잉글랜드, 국가대표(국가대표 적혀 있으면 NATIONAL_PLAYER = Y, 국가는 국가대표 자르고 저장)
+# 가능하면 club_id 까지 같이 가져오기
