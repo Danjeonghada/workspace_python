@@ -1,102 +1,126 @@
 import cx_Oracle
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-import time
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
-# Oracle 연결 정보
 username = 'dan'
 password = 'dan'
-# dsn = 'localhost:1521/xe'
-dsn = '192.168.219.106'
+dsn = 'localhost:1521/xe'
 
-# 셀레니움 설정
-options = Options()
-options.add_argument('--headless')
-options.add_argument('--disable-gpu')
-driver = webdriver.Chrome(options=options)
+position_map = {
+    "1": "GK", "3": "RWB", "4": "RB", "6": "CB", "8": "LB",
+    "9": "LWB", "11": "CDM", "13": "RM", "15": "CM", "17": "LM",
+    "19": "CAM", "22": "CF", "24": "RW", "26": "ST", "28": "LW"
+}
 
-# Oracle 연결
-conn = cx_Oracle.connect(username, password, dsn)
-cursor = conn.cursor()
+thread_local = threading.local()
+log_lock = threading.Lock()
 
-# player_cards 테이블에서 모든 card_id 가져오기
-cursor.execute("SELECT card_id FROM player_cards")
-card_ids = [row[0] for row in cursor.fetchall()]
-total_cards = len(card_ids)  # 총 카드 수
+def get_connection():
+    if not hasattr(thread_local, "conn"):
+        thread_local.conn = cx_Oracle.connect(username, password, dsn)
+    return thread_local.conn
 
-# 커밋할 데이터를 저장할 리스트
-update_data = []
+def log_failed(card_id, error):
+    with log_lock:
+        with open("failed_positions.txt", "a", encoding="utf-8") as f:
+            f.write(f"{card_id} // {error}\n")
 
-for idx, card_id in enumerate(card_ids):
-    player_id = str(card_id % 1_000_000)
-    url = f"https://fconline.nexon.com/DataCenter/PlayerInfo?spid={card_id}&n1Strong=1"
-    try:
-        driver.get(url)
+def fix_card_id(card_id):
+    card_id = str(card_id)
+    prefix = card_id[:3]
+    suffix = card_id[3:]
+    if prefix == '212':
+        return int('203' + suffix)
+    elif prefix == '234':
+        return int('224' + suffix)
+    return int(card_id)
 
-        # 알림창 확인
-        try:
-            WebDriverWait(driver, 3).until(EC.alert_is_present())
-            alert = driver.switch_to.alert
-            print(f"⚠ 알림창 닫힘: {alert.text}")
-            alert.dismiss()
-            continue
-        except TimeoutException:
-            pass
+def fetch_position_data(site_id):
+    url = f"https://fifaonline4.inven.co.kr/dataninfo/player/?code={site_id}"
+    res = requests.get(url, timeout=10)
+    res.encoding = 'utf-8'
+    return BeautifulSoup(res.text, 'html.parser')
 
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'div.ovr_set'))
+def extract_main_positions(soup):
+    pos_tags = soup.select("ul.tooltip_position span.pos")
+    positions = []
+    for tag in pos_tags:
+        class_names = tag.get("class", [])
+        pos_code = next(
+            (c[3:] for c in class_names if c.startswith("pos") and c[3:].isdigit() and len(c) == 5),
+            None
         )
+        if pos_code and pos_code in position_map:
+            positions.append(position_map[pos_code])
+    return list(set(positions))
 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+def extract_position_overalls(soup):
+    overalls = []
+    for p in soup.select("div.fifa4.field_area div.fifa4.field p"):
+        pos = p.get("data-position")
+        score = p.get("data-ori")
 
-        # 포지션 및 오버롤 추출
-        position_tag = soup.select_one("span.etc.position")
-        position = position_tag.text.strip() if position_tag else None
+        if pos and score and score.isdigit():
+            overalls.append((pos.upper(), int(score)))
+    return overalls
 
-        ovr_tag = soup.select_one("span.etc.ovr")
-        ovr = ovr_tag.text.strip() if ovr_tag else None
+def save_to_db(card_id, main_positions, position_overalls):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        for pos in main_positions:
+            cursor.execute("""
+                MERGE INTO main_positions t
+                USING (SELECT :card_id AS card_id, :pos AS main_position FROM dual) s
+                ON (t.card_id = s.card_id AND t.main_position = s.main_position)
+                WHEN NOT MATCHED THEN
+                  INSERT (card_id, main_position)
+                  VALUES (s.card_id, s.main_position)
+            """, {'card_id': card_id, 'pos': pos})
 
-        # 선수의 포지션 및 오버롤이 있다면 DB 업데이트
-        if position and ovr:
-            update_data.append((card_id, position, int(ovr)))  # 오버롤을 정수형으로 변환
-            print(f"✔ 업데이트됨: card_id={card_id}, position={position}, ovr={ovr}")
+        for pos, rating in position_overalls:
+            cursor.execute("""
+                MERGE INTO position_overalls t
+                USING (SELECT :card_id AS card_id, :pos AS position_name FROM dual) s
+                ON (t.card_id = s.card_id AND t.position_name = s.position_name)
+                WHEN NOT MATCHED THEN
+                  INSERT (card_id, position_name, overall_rating)
+                  VALUES (s.card_id, s.position_name, :rating)
+            """, {'card_id': card_id, 'pos': pos, 'rating': rating})
 
-        # 10개마다 진행률 출력
-        if (idx + 1) % 10 == 0:
-            progress = (idx + 1) / total_cards * 100
-            print(f"⏳ 진행률: {progress:.2f}% ({idx + 1}/{total_cards})")
-
-        # 100개씩 커밋
-        if len(update_data) >= 100:
-            cursor.executemany("""
-                INSERT INTO POSITION_OVERALLS (CARD_ID, POSITION_NAME, OVERALL_RATING)
-                VALUES (:1, :2, :3)
-            """, update_data)
-            conn.commit()
-            print("✔ 100개 데이터 커밋됨.")
-            update_data.clear()  # 커밋 후 리스트 비우기
-
+        conn.commit()
     except Exception as e:
-        print(f"❌ 예외 발생(card_id={card_id}): {e}")
-        continue
+        log_failed(card_id, f"DB 저장 오류: {e}")
+    finally:
+        cursor.close()
 
-# 남은 데이터 커밋
-if update_data:
-    cursor.executemany("""
-        INSERT INTO POSITION_OVERALLS (CARD_ID, POSITION_NAME, OVERALL_RATING)
-        VALUES (:1, :2, :3)
-    """, update_data)
-    conn.commit()
-    print("✔ 남은 데이터 커밋됨.")
+def load_card_ids():
+    conn = cx_Oracle.connect(username, password, dsn)
+    cursor = conn.cursor()
+    cursor.execute("SELECT card_id FROM player_cards")
+    ids = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return ids
 
-conn.commit()
-cursor.close()
-conn.close()
-driver.quit()
-print("✅ 전체 POSITION_OVERALLS 테이블 업데이트 완료")
+def process_card(card_id):
+    try:
+        site_id = fix_card_id(card_id)
+        soup = fetch_position_data(site_id)
+        mains = extract_main_positions(soup)
+        overs = extract_position_overalls(soup)
+        save_to_db(card_id, mains, overs)
+    except Exception as e:
+        log_failed(card_id, f"전체 실패: {e}")
+
+if __name__ == "__main__":
+    card_ids = load_card_ids()
+    print(f"📝 총 {len(card_ids)}개 카드 포지션 수집 시작")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(tqdm(executor.map(process_card, card_ids), total=len(card_ids), desc="진행률"))
+
+    print("✅ 포지션 저장 완료")
