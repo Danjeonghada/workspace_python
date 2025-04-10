@@ -29,7 +29,7 @@ def safe_print(*args, **kwargs):
 # 에러 로그 파일 저장
 def log_error(message):
     with log_lock:
-        with open("../error_log.txt", "a", encoding="utf-8") as f:
+        with open("../position_code.txt", "a", encoding="utf-8") as f:
             f.write(message + "\n")
 
 def get_driver():

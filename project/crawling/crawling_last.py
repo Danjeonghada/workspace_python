@@ -30,7 +30,7 @@ def safe_print(*args, **kwargs):
 
 def log_error(msg):
     with log_lock:
-        with open("error_log.txt", "a", encoding="utf-8") as f:
+        with open("position_code.txt", "a", encoding="utf-8") as f:
             f.write(msg + "\n")
 
 def get_driver():
