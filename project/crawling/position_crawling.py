@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 # Oracle 연결 정보
 username = 'dan'
@@ -20,6 +21,7 @@ position_map = {
 # 스레드 로컬 저장소
 thread_local = threading.local()
 print_lock = threading.Lock()  # 출력 동기화용
+failed_ids = []  # 실패한 card_id 저장용
 
 
 def get_connection():
@@ -47,39 +49,49 @@ def fix_card_id(card_id):
     return int(card_id)
 
 
-def fetch_position_data(site_id):
+def fetch_position_data(site_id, retries=3, delay=5):
+    """데이터 크롤링"""
     url = f"https://fifaonline4.inven.co.kr/dataninfo/player/?code={site_id}"
-    res = requests.get(url, timeout=30)
-    res.encoding = 'utf-8'
-    return BeautifulSoup(res.text, 'html.parser')
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    for attempt in range(retries):
+        try:
+            res = requests.get(url, headers=headers, timeout=30)
+            res.encoding = 'utf-8'
+            return BeautifulSoup(res.text, 'html.parser')
+        except requests.exceptions.RequestException:
+            time.sleep(delay)
+    raise Exception(f"[{site_id}] 요청 실패")
 
 
 def extract_main_positions(soup):
-    pos_tags = soup.select("ul.tooltip_position span.pos")
+    """메인 포지션 추출"""
     positions = []
+    pos_tags = soup.select("ul.tooltip_position span.pos")
     for tag in pos_tags:
         class_names = tag.get("class", [])
-        pos_code = next(
-            (c[3:] for c in class_names if c.startswith("pos") and c[3:].isdigit() and len(c) == 5),
-            None
-        )
-        if pos_code and pos_code in position_map:
-            positions.append(position_map[pos_code])
+        for class_name in class_names:
+            if class_name.startswith("pos"):  # pos로 시작하는 클래스만 처리
+                pos_code = class_name[3:]  # 'pos' 뒤의 숫자 추출
+                if pos_code.isdigit():  # 숫자만 있는 경우
+                    if pos_code in position_map:
+                        positions.append(position_map[pos_code])
+
     return list(set(positions))
 
 
 def update_main_position(card_id):
-    """크롤링을 통해 메인 포지션 업데이트"""
-    site_id = fix_card_id(card_id)
-    soup = fetch_position_data(site_id)
-    main_positions = extract_main_positions(soup)
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
+    """메인 포지션 업데이트"""
     try:
+        site_id = fix_card_id(card_id)
+        soup = fetch_position_data(site_id)
+        main_positions = extract_main_positions(soup)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
         for pos in main_positions:
-            # 메인 포지션을 card_position 테이블에 업데이트
             cursor.execute("""
                 UPDATE card_position
                 SET main_position = 'Y'
@@ -87,14 +99,17 @@ def update_main_position(card_id):
             """, {'card_id': card_id, 'position_name': pos})
 
         conn.commit()
-        safe_print(f"✔ 클럽 히스토리 및 메인 포지션 업데이트됨: card_id={card_id}")
+        safe_print(f"✔ 업데이트 완료: card_id={card_id}")
     except Exception as e:
-        safe_print(f"❌ 예외 발생(card_id={card_id}): {e}")
+        failed_ids.append(card_id)
+        safe_print(f"❌ 실패(card_id={card_id}): {e}")
     finally:
-        cursor.close()
+        if 'cursor' in locals():
+            cursor.close()
 
 
 def load_card_ids():
+    """card_id 목록 로드"""
     conn = cx_Oracle.connect(username, password, dsn)
     cursor = conn.cursor()
     cursor.execute("SELECT card_id FROM player_cards")
@@ -110,12 +125,36 @@ def cleanup():
         thread_local.conn.close()
 
 
+def retry_failed(ids):
+    """실패한 card_id 재시도"""
+    safe_print(f"🔁 실패한 {len(ids)}개 카드 재시도 시작")
+    failed_final = []
+    for card_id in tqdm(ids, desc="재시도 진행률"):
+        try:
+            update_main_position(card_id)
+        except Exception:
+            failed_final.append(card_id)
+    if failed_final:
+        with open("failed_final.txt", "w") as f:
+            for fid in failed_final:
+                f.write(str(fid) + "\n")
+        safe_print(f"⚠ 최종 실패 {len(failed_final)}개 → failed_final.txt에 저장됨")
+    else:
+        safe_print("🎉 재시도 모두 성공!")
+
+
 if __name__ == "__main__":
     card_ids = load_card_ids()
-    print(f"📝 총 {len(card_ids)}개 카드 포지션 수집 시작")
+    print(f"📝 총 {len(card_ids)}개 카드 메인 포지션 업데이트 시작")
 
+    # 병렬 처리
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(tqdm(executor.map(update_main_position, card_ids), total=len(card_ids), desc="진행률"))
 
     cleanup()
-    print("✅ 메인 포지션 업데이트 완료")
+
+    if failed_ids:
+        retry_failed(failed_ids)
+
+    print("✅ 전체 작업 완료")
+

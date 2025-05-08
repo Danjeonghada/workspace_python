@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
+import re
 
 # Oracle 연결 정보
 username = 'dan'
@@ -40,14 +41,16 @@ def fix_card_id(card_id):
     return int(card_id)
 
 
+def clean_club_name(raw_name):
+    """클럽 이름에서 괄호 포함 설명 제거"""
+    return re.sub(r'\(.*?\)', '', raw_name).strip()
+
+
 def process_club_history(card_id):
-    """클럽 히스토리 데이터 추출 및 player_club_history 테이블에 저장"""
     conn = get_connection()
     cursor = conn.cursor()
 
     fixed_card_id = fix_card_id(card_id)
-
-    # player_id는 card_id에서 뒤의 6자리를 추출하여 설정
     player_id = str(fixed_card_id)[-6:]
 
     url = f"https://fifaonline4.inven.co.kr/dataninfo/player/?code={fixed_card_id}"
@@ -56,39 +59,52 @@ def process_club_history(card_id):
         response = requests.get(url)
         if response.status_code != 200:
             safe_print(f"❌ 요청 실패: {url}")
+            with open("failed_cards.txt", "a", encoding="utf-8") as f:
+                f.write(f"{card_id}\n")
             return
 
         soup = BeautifulSoup(response.content, 'html.parser')
-
-        # 클럽 히스토리 데이터 추출
         club_history_section = soup.find('div', class_='fifa4 player_club clearfix')
+
         if club_history_section:
             for item in club_history_section.find_all('li', class_='fifa4 clearfix'):
                 year_range = item.find('span').text.strip()
                 club_name = item.text.replace(year_range, '').strip()
+                clean_name = clean_club_name(club_name)
 
-                # 연도 범위 처리 (끝 연도 없으면 None으로 처리)
-                start_year, end_year = year_range.split('~')
-                start_year = int(start_year.strip())
-                end_year = None if end_year.strip() == '' else int(end_year.strip())
-
-                # 클럽 ID 가져오기
-                cursor.execute("SELECT club_id FROM clubs WHERE club_name = :1", [club_name.strip()])
+                cursor.execute("SELECT club_id FROM clubs WHERE club_name = :1", [clean_name])
                 club_result = cursor.fetchone()
                 if club_result:
                     club_id = club_result[0]
-                    cursor.execute("""
-                        INSERT INTO player_club_history (player_id, club_id, start_year, end_year)
-                        VALUES (:player_id, :club_id, :start_year, :end_year)
-                    """, {'player_id': player_id, 'club_id': club_id, 'start_year': start_year, 'end_year': end_year})
-                    safe_print(f"✔ 클럽 히스토리 업데이트됨: card_id={card_id}, club={club_name}, {start_year}~{end_year}")
                 else:
+                    # 없는 클럽은 club_id = 0 처리
+                    club_id = 0
                     safe_print(f"⚠ 클럽 없음: {club_name}")
+                    with open("unknown_clubs.txt", "a", encoding="utf-8") as f:
+                        f.write(f"{club_name},{player_id}\n")
+
+                # 무조건 INSERT or MERGE 수행
+                cursor.execute("""
+                    MERGE INTO player_club_history pch
+                    USING DUAL
+                    ON (pch.player_id = :player_id AND pch.club_id = :club_id AND pch.club_year = :club_year)
+                    WHEN NOT MATCHED THEN
+                        INSERT (player_id, club_id, club_year)
+                        VALUES (:player_id, :club_id, :club_year)
+                """, {
+                    'player_id': player_id,
+                    'club_id': club_id,
+                    'club_year': year_range
+                })
+
+                safe_print(f"✔ 저장됨: card_id={card_id}, club={clean_name}, year={year_range}")
 
         conn.commit()
 
     except Exception as e:
-        safe_print(f"❌ 클럽 히스토리 예외 발생(card_id={card_id}): {e}")
+        safe_print(f"❌ 예외 발생(card_id={card_id}): {e}")
+        with open("failed_cards.txt", "a", encoding="utf-8") as f:
+            f.write(f"{card_id}\n")
 
     finally:
         cursor.close()
