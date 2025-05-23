@@ -100,6 +100,65 @@ def predict():
 
     return jsonify(response)
 
+@app.route('/predict_real_fee', methods=['POST'])
+def predict_real_fee():
+    data = request.get_json()
+    dong = data['dong']
+    year = int(data['year'])
+
+    df_filtered = df[(df['dong'] == dong) & (df['year'] == year)]
+    if df_filtered.empty:
+        return jsonify({"error": "데이터가 없습니다."})
+
+    result = [
+        {"month": int(row["month"]), "real_fee": int(row["final_monthly_fee"])}
+        for _, row in df_filtered.iterrows()
+    ]
+    return jsonify({"dong": dong, "year": year, "results": result})
+
+@app.route('/predict_xgb', methods=['POST'])
+def predict_xgb():
+    data = request.get_json()
+    dong = data['dong']
+    year = int(data['year'])
+
+    if dong not in df['dong'].unique():
+        return jsonify({"error": "해당 동 이름이 존재하지 않습니다."}), 400
+
+    # Prophet 예측
+    df_dong = df[df['dong'] == dong][['year', 'month', 'final_monthly_fee']].copy()
+    df_dong['ds'] = pd.to_datetime(df_dong[['year', 'month']].assign(day=1))
+    df_dong['y'] = df_dong['final_monthly_fee']
+
+    prophet = Prophet(yearly_seasonality=True, weekly_seasonality=False, daily_seasonality=False)
+    prophet.fit(df_dong[['ds', 'y']])
+    future = prophet.make_future_dataframe(periods=24, freq='MS')
+    forecast = prophet.predict(future)
+
+    forecast['dong'] = dong
+    forecast['year'] = forecast['ds'].dt.year
+    forecast['month'] = forecast['ds'].dt.month
+    forecast.rename(columns={'yhat': 'prophet_pred'}, inplace=True)
+    target_year_data = forecast[forecast['year'] == year][['dong', 'year', 'month', 'prophet_pred']]
+
+    features = pd.get_dummies(target_year_data.copy(), columns=['dong'])
+    trained_features = model.get_booster().feature_names
+    for col in trained_features:
+        if col not in features.columns:
+            features[col] = 0
+    features = features[trained_features]
+    xgb_pred = model.predict(features)
+
+    result = [
+        {"month": int(m), "xgb_pred": int(round(p))}
+        for m, p in zip(target_year_data['month'], xgb_pred)
+    ]
+
+    return jsonify({
+        "dong": dong,
+        "year": year,
+        "results": result
+    })
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)

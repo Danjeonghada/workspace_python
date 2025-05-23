@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from prophet import Prophet
 from tqdm import tqdm
 from xgboost import XGBRegressor
@@ -23,7 +22,7 @@ for dong in tqdm(dong_list):
     prophet = Prophet(yearly_seasonality=True, weekly_seasonality=False, daily_seasonality=False)
     prophet.fit(df_dong[['ds', 'y']])
 
-    future = prophet.make_future_dataframe(periods=12, freq='MS')
+    future = prophet.make_future_dataframe(periods=36, freq='MS')
     forecast = prophet.predict(future)
 
     forecast_result = forecast[['ds', 'yhat']].copy()
