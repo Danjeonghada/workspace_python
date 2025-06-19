@@ -79,7 +79,7 @@ def recommend(user_id):
     similarities.sort(key=lambda x: -x[1]) # 내림차순 정렬
     cursor.close()
     conn.close()
-    return render_template("result.html"
+    return render_template("index.html"
                 , user_id=user_id, similarities=similarities)
 
 if __name__ == '__main__':
