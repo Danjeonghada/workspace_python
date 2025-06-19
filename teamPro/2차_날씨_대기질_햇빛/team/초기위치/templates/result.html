@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <title>VWorld 3D 일조량 분석 (WebGL 3.0)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- WebGL 3.0 API -->
+  <script type="text/javascript"
+          src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey=59E8E97C-1463-372A-9540-000DB836F45D&domain=localhost"></script>
+  <script type="text/javascript"
+          src="https://map.vworld.kr/js/dtkmap/tool3d/libapis/sunlight/sunlight_analysis_api.min.js"></script>
+
+   <style>
+    html, body { margin: 0; padding: 0; height: 100%; width: 100%; font-family: sans-serif; }
+    #vmap { width: 70%; height: 80%; float: left; } /* 지도와 컨트롤 영역 분리를 위해 float 사용 */
+    .controls-container { /* 전체 컨트롤 영역을 묶는 컨테이너 추가 */
+      width: 28%; /* 지도 옆 공간 활용 */
+      height: 80%;
+      float: right;
+      padding: 10px;
+      background: #f0f0f0;
+      box-sizing: border-box; /* padding 포함 너비 계산 */
+      overflow-y: auto; /* 내용이 많아지면 스크롤 */
+    }
+    .controls { /* 기존 controls 이름은 유지하되, 컨테이너 안에 넣음 */
+      display: flex;
+      flex-direction: column; /* 세로로 정렬 */
+      gap: 10px;
+      margin-bottom: 20px; /* 각 섹션 간 간격 */
+    }
+    .search-bar, .analysis-tools { /* 검색 바와 분석 도구 섹션 구분 */
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      background-color: #fff;
+    }
+    .analysis-tools dl {
+        margin: 0;
+        padding: 0;
+    }
+    .analysis-tools dt {
+        font-weight: bold;
+        margin-top: 10px;
+    }
+    .analysis-tools dd {
+        margin-left: 0;
+        margin-bottom: 5px;
+    }
+    input[type="number"], input[type="text"], select, button {
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+    .range {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .range span {
+      min-width: 30px; /* 시간 표시 공간 확보 */
+      text-align: right;
+    }
+    .range input[type="range"] {
+      flex-grow: 1;
+    }
+   .btn { /* 버튼 기본 스타일 */
+  padding: 8px 15px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+.btn:hover {
+  background-color: #0056b3;
+}
+    /* jQuery UI Autocomplete 스타일 조정 */
+    .ui-autocomplete {
+      max-height: 200px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      z-index: 1000; /* 지도가 가리지 않도록 z-index 높임 */
+      border: 1px solid #ccc;
+      background-color: #fff;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .ui-menu-item {
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+    .ui-menu-item:hover {
+      background-color: #f0f0f0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- 사용자 초기 위치 스크립트: Flask에서 서버값 바인딩 -->
+<script type="text/javascript">
+  const userLat = {{ user.latitude | tojson }};
+  const userLng = {{ user.longitude | tojson }};
+  const userAptName = {{ user.kapt_name | tojson }};
+</script>
+
+<!-- 지도 표시 영역 -->
+<div id="vmap"></div>
+
+<!-- 아파트명 검색 및 동 선택 UI -->
+<div class="search-bar" style="margin:8px;">
+  <input type="text" id="aptName" placeholder="아파트명 입력" style="width:140px;">
+  <select id="aptBlock">
+    <option value="">동 선택</option>
+  </select>
+  <button type="button" id="searchBtn">검색</button>
+</div>
+
+<!-- 일조량 지점 선택 버튼 -->
+<button id="btnPoint" class="btn btn-primary">일조량 지점선택</button>
+<br><br>
+
+<!-- 일조량 분석 설정 폼 -->
+<form class="field" id="frmSetList">
+  <div id="toolbar">
+    <dl>
+      <dt>분석날짜</dt>
+      <dd><label for="anaDate"></label><input type="text" id="anaDate" name="anaDate" class="input date"
+                  data-bind="value: contourDate, valueUpdate: 'input'"
+                                                    onchange="sunlightAnalysis.createSunObject()" valCheck="date"
+                                                    fieldTitle="분석날짜"/></dd>
+       <dt>시간별 태양위치</dt>
+            <dd>
+                <div class="range">
+                    <label for="anaTim"><span style="float: left; width:15px; text-align:right;" id="time_span"
+                                              data-bind="text: contourTime"></span>: 00</label>
+                    <input type="range" id="anaTim" name="anaTim" class="form-control-range" min="5.0" max="20.0"
+                           step="1"
+                           data-bind="value: contourTime, valueUpdate: 'input'"
+                           onchange="sunlightAnalysis.createSunObject()"/>
+                </div>
+            </dd>
+      <dt>분석시간범위</dt>
+            <dd>
+                <label for="anaStTime"></label>
+                <select class="select" style="width: auto;" id="anaStTime"
+                        onchange="sunlightAnalysis.anaTimeCheck(this.value, document.getElementById('anaEdTime').value)"></select>
+                 <label for="anaEdTime"></label><select class="select" style="width: auto;" id="anaEdTime"
+                                                         onchange="sunlightAnalysis.anaTimeCheck(document.getElementById('anaStTime').value, this.value)"></select>
+            </dd>
+       <dt>분석시간간격</dt>
+            <dd>
+                <label for="anlysTimeInterval" style="width: 150px;"></label>
+                <select class="form-control" id="anlysTimeInterval">
+                    <option value="15">15분</option>
+                    <option value="10">10분</option>
+                    <option value="5">5분</option>
+                    <option value="1">1분</option>
+                </select></dd>
+        </dl>
+    </div>
+</form>
+
+<br>
+
+<!-- 분석 수행 버튼 -->
+<button id="runAnlys" class="btn btn-primary">분석 수행</button>
+<br>
+
+<script type="text/javascript">
+// VWorld 지도 초기화 함수
+function vwmap(){
+  const options = {
+    mapId : "vmap",
+    initPosition: new vw.CameraPosition(
+      new vw.CoordZ(userLng, userLat, 500), // 사용자 초기 위치 반영
+      new vw.Direction(0, -90, 0)           //카메라 방향
+    ),
+    logo: true,
+    navigation: true
+  };
+  window.map = new vw.Map();
+  map.setOption(options);
+  map.start();
+
+ // 사용자 위치 마커 생성 및 지도 표시 - 이 부분이 잘못된건지 지도에 안 나옴
+const userPt = new vw.geom.Point(new vw.Coord(userLng, userLat));
+userPt.setImage("https://map.vworld.kr/images/op02/map_point.png"); // 기본 마커 이미지
+userPt.setName("사용자 위치");
+userPt.setFont("고딕");
+userPt.setFontSize(14);
+userPt.create(); // 지도에 마커 표시
+}
+vwmap();
+
+// 일조량 지점 선택 버튼 클릭 시 분석 API 기능 호출
+document.getElementById("btnPoint").addEventListener("click", function() {
+  sunlightAnalysis.drawPointOnMap();
+});
+
+ // 분석 수행 버튼 클릭 시 파라미터 읽어 분석 시작
+document.getElementById("runAnlys").addEventListener("click", function() {
+  const interval = parseInt(document.getElementById('anlysTimeInterval').value);
+  const stTime = parseInt(document.getElementById('anaStTime').value)+1;
+  const endTime = parseInt(document.getElementById('anaEdTime').value);
+  sunlightAnalysis.runSunlight(interval, stTime, endTime, function(ResultInfo){
+    console.log("성공 : " + "clickeddata.selected");
+    console.log(ResultInfo);
+  });
+});
+
+ // 아파트 검색 버튼 클릭 이벤트
+document.getElementById("searchBtn").addEventListener("click", function(){
+  const aptName = document.getElementById("aptName").value.trim();
+  const aptBlock = document.getElementById("aptBlock").value;
+  if (!aptName) return alert("아파트명을 입력하세요!");
+
+  // 서버에 아파트명과 동 정보 전송, 결과 좌표 받아 지도 이동 및 마커 생성
+  fetch("/search_address", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ name: aptName, block: aptBlock })
+  })
+  .then(res=>res.json())
+  .then(data=>{
+    if(data.success){
+      const lat = data.latitude, lng = data.longitude;
+      map.moveTo(new vw.CameraPosition(
+        new vw.CoordZ(lng, lat, 500),
+        new vw.Direction(0, -90, 0)
+      ));
+      const pt = new vw.geom.Point(new vw.Coord(lng, lat));
+      pt.setImage("https://map.vworld.kr/images/op02/map_point.png");
+      pt.setName(data.apartment_name);
+      pt.setFont("고딕");
+      pt.setFontSize(14);
+      pt.create();
+    }else{
+      alert("검색 결과 없음");
+    }
+  });
+});
+
+  // 아파트명 입력시 동 정보 조회하여 select 옵션 동적 생성
+document.getElementById("aptName").addEventListener("change", function(){
+  const aptName = this.value.trim();
+  if(!aptName) return;
+  fetch("/get_blocks?apt_name=" + encodeURIComponent(aptName))
+    .then(res=>res.json())
+    .then(data=>{
+      const $block = document.getElementById("aptBlock");
+      $block.innerHTML = '<option value="">동 선택</option>';
+      data.forEach(block => {
+        $block.innerHTML += `<option value="${block}">${block}</option>`;
+      });
+    });
+});
+</script>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+<!--아파트명 자동완성 기능 구현-->
+<script type="text/javascript">
+$(function() {
+  $("#aptName").autocomplete({
+    source: function(req, res) {
+      $.ajax({
+        url: "/autocomplete_name",
+        dataType: "json",
+        data: { term: req.term },
+        success: function(data) { res(data); }
+      });
+    },
+    minLength: 1,
+    select: function(event, ui) {
+      $("#aptName").val(ui.item.value);  // 자동완성 선택 시 해당 아파트 동 목록 업데이트
+      fetch("/get_blocks?apt_name=" + encodeURIComponent(ui.item.value))
+        .then(res=>res.json())
+        .then(data=>{
+          const $block = document.getElementById("aptBlock");
+          $block.innerHTML = '<option value="">동 선택</option>';
+          data.forEach(block => {
+            $block.innerHTML += `<option value="${block}">${block}</option>`;
+          });
+        });
+      return false;
+    }
+  });
+});
+</script>
+</body>
+</html>

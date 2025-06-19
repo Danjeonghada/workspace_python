@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>VWorld 3D 일조량 분석 및 아파트 검색</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- WebGL 3.0 API (VWorld 지도를 초기화하는 데 사용) -->
+    <script type="text/javascript" src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey=C37F9D93-9BA1-3A3D-8EE5-27BB6E66D5C9&domain=localhost"></script>
+    <!-- 일조량 분석 기능 -->
+    <script type="text/javascript" src="https://map.vworld.kr/js/dtkmap/tool3d/libapis/sunlight/sunlight_analysis_api.min.js"></script>
+    <!-- jQuery CDN (AJAX 통신에 필요) -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<!--그림자분석석-->
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+     <script type="text/javascript" src="https://map.vworld.kr/js/dtkmap/tool3d/libapis/sunlight/sunlight_analysis_api.min.js"></script>
+
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
+        /* 지도 높이 조정: 검색 폼과 컨트롤 영역을 고려하여 전체 높이에서 여백을 줍니다. */
+        #vmap { width: 100%; height: calc(100% - 160px); }
+        .controls {
+            height: 80px;
+            padding: 10px;
+            background: #f0f0f0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: sans-serif;
+        }
+        input[type="number"] {
+            width: 60px;
+        }
+        #searchForm {
+            padding: 10px;
+            background: #e9e9e9;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #toolbar dl {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        #toolbar dt {
+            font-weight: bold;
+            width: 80px;
+        }
+        #toolbar dd {
+            margin-left: 0;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .range {
+            display: flex;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="vmap"></div>
+
+    <!-- 검색 API의 파라미터를 설정하는 form 영역 -->
+    <!-- 이제 이 폼은 Flask 서버로 검색어를 보냅니다. -->
+    <form id="searchForm" action="#" class="form_data" onsubmit="return false;search();">
+        <!-- VWorld API 호출에 직접 사용되던 hidden input 필드는 더 이상 필요 없거나,
+             Flask 서버로 보낼 정보만 남겨둡니다. 여기서는 검색어만 보냅니다. -->
+        <div>
+            <input type="text" id="searchValue" name="query" value="목양" style="width: 100px;" />
+            <a href="javascript:search();">검색</a>
+        </div>
+    </form>
+
+    <div class="controls">
+        <button id="btnPoint" class="btn btn-primary">일조량 지점선택</button>
+        <form class="field" id="frmSetList">
+            <div id="toolbar">
+                <dl>
+                    <dt>분석날짜</dt>
+                    <dd>
+                        <label for="anaDate"></label>
+                        <input type="text" id="anaDate" name="anaDate" class="input date" data-bind="value: contourDate, valueUpdate: 'input'" onchange="sunlightAnalysis.createSunObject()" valCheck="date" fieldTitle="분석날짜"/>
+                    </dd>
+                    <dt>시간별 태양위치</dt>
+                    <dd>
+                        <div class="range">
+                            <label for="anaTim">
+                                <span style="float: left; width:15px; text-align:right;" id="time_span" data-bind="text: contourTime"></span>: 00
+                            </label>
+                            <input type="range" id="anaTim" name="anaTim" class="form-control-range" min="5.0" max="20.0" step="1"
+                                data-bind="value: contourTime, valueUpdate: 'input'" onchange="sunlightAnalysis.createSunObject()"/>
+                        </div>
+                    </dd>
+                    <dt>분석시간범위</dt>
+                    <dd>
+                        <label for="anaStTime"></label>
+                        <select class="select" style="width: auto;" id="anaStTime" onchange="sunlightAnalysis.anaTimeCheck(this.value, document.getElementById('anaEdTime').value)"></select> ~
+                        <label for="anaEdTime"></label>
+                        <select class="select" style="width: auto;" id="anaEdTime" onchange="sunlightAnalysis.anaTimeCheck(document.getElementById('anaStTime').value, this.value)"></select>
+                    </dd>
+                    <dt>분석시간간격</dt>
+                    <dd>
+                        <label for="anlysTimeInterval" style="width: 150px;"></label>
+                        <select class="form-control" id="anlysTimeInterval">
+                            <option value="15">15분</option>
+                            <option value="10">10분</option>
+                            <option value="5">5분</option>
+                            <option value="1">1분</option>
+                        </select>
+                    </dd>
+                </dl>
+            </div>
+        </form>
+        <button id="runAnlys" class="btn btn-primary">분석 수행</button>
+    </div>
+
+    <script type="text/javascript">
+        let map; // 전역 변수로 map 객체 선언
+
+        function vwmapInit(){
+            let options = {
+                mapId : "vmap",
+                initPosition: new vw.CameraPosition(
+                    new vw.CoordZ(127.3845,36.3504,2000), // 초기 위치를 대전으로 설정
+                    new vw.Direction(0, -60, 0)
+                ),
+                logo: true,
+                navigation: true // 네비게이션 컨트롤 활성화
+            };
+
+            map = new vw.Map(); // map 객체를 전역 변수로 할당
+            map.setOption( options );
+            map.start();
+        }
+        vwmapInit(); // 지도 초기화 함수 호출
+
+        // 일조량 지점 선택 버튼 클릭 이벤트
+        document.querySelector('#btnPoint').addEventListener("click", function() {
+            sunlightAnalysis.drawPointOnMap();
+        });
+
+        // 분석 수행 버튼 클릭 이벤트
+        document.querySelector('#runAnlys').addEventListener("click", function() {
+            let interval = parseInt(document.getElementById('anlysTimeInterval').value);
+            let stTime = parseInt(document.getElementById('anaStTime').value);
+            let endTime = parseInt(document.getElementById('anaEdTime').value);
+
+            sunlightAnalysis.runSunlight(interval, stTime, endTime, function(ResultInfo){
+                console.log("일조량 분석 성공: ", ResultInfo);
+            });
+        });
+
+        /** 검색 (이제 Flask 서버로 요청을 보냅니다)
+         */
+        let search = function(){
+            map.clear();
+            const searchValue = document.getElementById('searchValue').value; // 검색 요청 주소 (아파트명)
+
+            $.ajax({
+                type: "POST", // Flask 서버의 /search_address 엔드포인트가 POST를 받음
+                url: "http://127.0.0.1:5000/search_address", // Flask 서버의 주소와 엔드포인트
+                contentType: "application/json", // JSON 형태로 데이터 전송을 명시
+                data : JSON.stringify({ address: searchValue }), // 검색어를 JSON 객체로 변환하여 전송
+                dataType: 'json', // Flask 서버가 JSON 형태로 응답할 것이므로 json으로 설정
+                success: function(response) {
+                    if(response.success){
+                        // Flask 서버로부터 받은 아파트 정보를 지도에 표시
+                        let latitude = response.latitude;
+                        let longitude = response.longitude;
+                        let apartmentName = response.apartment_name;
+                        // let direction = response.direction; // 현재 사용하지 않지만 정보는 있음
+                        // let dongName = response.dong_name; // 현재 사용하지 않지만 정보는 있음
+
+                        // 지도 이동 및 마커 표시
+                        move(longitude, latitude, 500); // 찾은 좌표로 이동
+
+                        let pt = new vw.geom.Point(new vw.Coord(longitude, latitude));
+                        pt.setImage("https://map.vworld.kr/images/op02/map_point.png");
+                        pt.setName(apartmentName); // 아파트명으로 마커 이름 설정
+                        pt.setFont("고딕");
+                        pt.setId("apartment_marker"); // 고유 ID 부여
+                        pt.setFontSize(14);
+                        // Flask 서버가 주소 정보를 상세히 보내주면 여기에 설정
+                        // pt.set("parcel",response.parcel_address);
+                        // pt.set("road",response.road_address);
+                        pt.create(); // 지도에 포인트 객체 생성
+
+                        // 팝업 이벤트 (필요하다면 Flask 서버에서 받은 상세 정보로 팝업 내용 업데이트)
+                        let eventHandler = function(windowPosition, ecefPosition, cartographic, featureInfo) {
+                            if ( featureInfo != null ) {
+                                let popupHtml = `<b>${apartmentName}</b><br>`;
+                                popupHtml += `위도: ${latitude}<br>경도: ${longitude}<br>`;
+                                popupHtml += `방향: ${response.direction}<br>동 이름: ${response.dong_name}`;
+
+                                let pop = new vw.Popup(
+                                    "apartment_popup",
+                                    "vmap",
+                                    apartmentName, // 팝업 제목
+                                    popupHtml,     // 팝업 내용
+                                    200, 120,      // 팝업 크기 (너비, 높이)
+                                    windowPosition.x, windowPosition.y
+                                );
+                                pop.create();
+                            }
+                        }
+                        pt.addEventListener(eventHandler);
+
+                    } else {
+                        // Flask 서버에서 success: false를 보낸 경우 (검색 결과 없음 등)
+                        alert("검색결과가 없습니다: " + response.message);
+                    }
+                },
+                error: function(xhr, stat, err) {
+                    console.error("서버 통신 오류:", err);
+                    alert("서버와 통신 중 오류가 발생했습니다. Flask 서버가 실행 중인지 확인하세요.");
+                }
+            });
+        }
+
+        /** 이동함수 구현
+         */
+        let move = function(x,y,z){
+            let movePo = new vw.CoordZ(x,y,z);
+            let mPosi = new vw.CameraPosition(movePo, new vw.Direction(0,-90,0));
+            map.moveTo(mPosi);
+        }
+    </script>
+</body>
+</html>
