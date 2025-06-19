@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <title>VWorld 아파트 검색 + 일조량 분석</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- VWorld 지도 API -->
+    <script src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey=59E8E97C-1463-372A-9540-000DB836F45D&domain=localhost"></script>
+    <!-- 일조량 분석 API -->
+    <script src="https://map.vworld.kr/js/dtkmap/tool3d/libapis/sunlight/sunlight_analysis_api.min.js"></script>
+    <!-- jQuery + UI -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
+        #vmap { width: 100%; height: 350px; }
+        .search-bar {
+          padding: 10px;
+          background: #f5f5f5;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          align-items: center;
+        }
+        select, input { padding: 5px; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<div id="vmap"></div>
+
+<!-- 검색 UI -->
+<div class="search-bar">
+    <input type="text" id="aptName" placeholder="아파트명 입력" style="width: 200px;">
+    <select id="aptBlock">
+        <option value="">동 선택</option>
+    </select>
+    <button onclick="search()">검색</button>
+</div>
+
+<!-- 일조량 분석 UI -->
+<div class="search-bar" style="background:#e8e8e8">
+    <button id="btnPoint">📍 지점 선택</button>
+    <label>분석 날짜:
+        <input type="text" id="anaDate"/>
+    </label>
+    <label>시간별 태양위치:
+        <span id="time_span" style="display:inline-block;width:30px;">09</span>:00
+        <input type="range" id="anaTim" min="4" max="20" step="1"/>
+    </label>
+    <label>시간범위:
+        <select id="anaStTime"></select> ~ <select id="anaEdTime"></select>
+    </label>
+    <label>간격:
+        <select id="anlysTimeInterval">
+            <option value="15">15분</option>
+            <option value="10">10분</option>
+            <option value="5">5분</option>
+            <option value="1">1분</option>
+        </select>
+    </label>
+    <button id="runAnlys">☀ 분석 수행</button>
+</div>
+
+<script>
+    let map;
+
+    function vwmapInit() {
+      const options = {
+        mapId: "vmap",
+        initPosition: new vw.CameraPosition(
+          new vw.CoordZ(127.3845, 36.3504, 2000),
+          new vw.Direction(0, -60, 0)
+        ),
+        logo: true, navigation: true
+      };
+      map = new vw.Map();
+      map.setOption(options);
+      map.start();
+    }
+
+    function setTodayDate() {
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      document.getElementById("anaDate").value = `${yyyy}-${mm}-${dd}`;
+    }
+
+    function fillTimeOptions() {
+      const stSel = document.getElementById("anaStTime");
+      const edSel = document.getElementById("anaEdTime");
+      for (let i = 4; i <= 20; i++) {
+        const txt = `${i.toString().padStart(2, '0')}시`;
+        stSel.insertAdjacentHTML('beforeend', `<option value="${i}">${txt}</option>`);
+        edSel.insertAdjacentHTML('beforeend', `<option value="${i}">${txt}</option>`);
+      }
+      stSel.value = "9";
+      edSel.value = "18";
+    }
+
+    // 반드시 한 번만 등록
+    document.addEventListener("DOMContentLoaded", () => {
+      vwmapInit();
+      setTodayDate();
+      fillTimeOptions();
+
+      setTimeout(() => {
+        sunlightAnalysis.createSunObject();
+      }, 400);
+
+      // 슬라이더 이벤트
+      document.getElementById("anaTim").addEventListener("input", function () {
+        const val = this.value;
+        document.getElementById("time_span").innerText = val.toString().padStart(2, '0');
+        sunlightAnalysis.createSunObject();
+      });
+
+      // 지점 선택
+      document.getElementById("btnPoint").addEventListener("click", () => {
+        sunlightAnalysis.drawPointOnMap();
+      });
+
+      // 분석 수행
+      document.getElementById("runAnlys").addEventListener("click", () => {
+        const date = document.getElementById("anaDate").value;
+        const interval = parseInt(document.getElementById("anlysTimeInterval").value);
+        const stTime = parseInt(document.getElementById("anaStTime").value) + 1;
+        const edTime = parseInt(document.getElementById("anaEdTime").value);
+
+        if (!date) return alert("날짜를 입력하세요.");
+
+        sunlightAnalysis.runSunlight(interval, stTime, edTime, function(ResultInfo) {
+          console.log("✅ 분석 완료", ResultInfo);
+          alert("✔ 일조량 분석 완료 (콘솔 확인)");
+        });
+      });
+    });
+
+    // 아파트명 자동완성 등은 그대로
+    $(function() {
+      $("#aptName").autocomplete({
+        source: function(req, res) {
+          $.ajax({ url: "/autocomplete_name", type: "GET", data: { term: req.term }, success: res });
+        },
+        select: function(_, ui) {
+          $("#aptName").val(ui.item.value);
+          loadBlockOptions(ui.item.value);
+          return false;
+        }
+      });
+    });
+
+    function loadBlockOptions(aptName) {
+      $.ajax({
+        url: "/get_blocks",
+        type: "GET",
+        data: { apt_name: aptName },
+        success: function(data) {
+          const $block = $("#aptBlock");
+          $block.empty();
+          $block.append('<option value="">동 선택</option>');
+          const sorted = data.sort((a, b) => parseInt(a.replace(/\D/g, '')) - parseInt(b.replace(/\D/g, '')));
+          sorted.forEach(block => $block.append(`<option value="${block}">${block}</option>`));
+        }
+      });
+    }
+
+    function search() {
+      map.clear();
+      const aptName = $("#aptName").val().trim();
+      const aptBlock = $("#aptBlock").val();
+      if (!aptName || !aptBlock) return alert("아파트명과 동을 선택해주세요.");
+
+      $.ajax({
+        url: "/search_address",
+        type: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ name: aptName, block: aptBlock }),
+        success: function(res) {
+          if (res.success) {
+            const lat = res.latitude, lng = res.longitude;
+            const pos = new vw.CoordZ(lng, lat, 500);
+            map.moveTo(new vw.CameraPosition(pos, new vw.Direction(0, -90, 0)));
+
+            const pt = new vw.geom.Point(new vw.Coord(lng, lat));
+            pt.setImage("https://map.vworld.kr/images/op02/map_point.png");
+            pt.setName(res.apartment_name);
+            pt.setFont("고딕");
+            pt.setFontSize(14);
+            pt.create();
+
+            pt.addEventListener((pos, _, __, f) => {
+              if (f) {
+                const html = `<b>${res.apartment_name}</b><br>위도: ${lat}<br>경도: ${lng}<br>방향: ${res.direction}<br>동 이름: ${res.dong_name}`;
+                new vw.Popup("popup", "vmap", res.apartment_name, html, 200, 120, pos.x, pos.y).create();
+              }
+            });
+          } else {
+            alert("검색 실패: " + res.message);
+          }
+        },
+        error: () => alert("서버 오류")
+      });
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <title>아파트 일사량 분석</title>
+    <style>
+        .autocomplete-list { border: 1px solid #ccc; max-height: 160px; overflow-y: auto; }
+        .autocomplete-item { padding: 5px; cursor: pointer; }
+        .autocomplete-item:hover { background: #e0e0ff; }
+        #resultArea img { margin-top: 20px; }
+        pre { font-family: 'Malgun Gothic', 'monospace'; }
+    </style>
+</head>
+<body>
+<h3>아파트명 검색</h3>
+<input type="text" id="aptInput" autocomplete="off" placeholder="아파트명을 입력하세요" style="width:250px;">
+<div id="autocomplete" class="autocomplete-list"></div>
+<div id="blockArea"></div>
+<div id="resultArea"></div>
+
+<script>
+    const aptInput = document.getElementById('aptInput');
+    const autocomplete = document.getElementById('autocomplete');
+    const blockArea = document.getElementById('blockArea');
+    const resultArea = document.getElementById('resultArea');
+    let selectedAptCode = null;
+
+    // 자동완성 아파트명 검색
+    aptInput.addEventListener('input', async function() {
+        const val = this.value.trim();
+        autocomplete.innerHTML = '';
+        blockArea.innerHTML = '';
+        resultArea.innerHTML = '';
+        selectedAptCode = null;
+        if (val.length < 1) return;
+        const res = await fetch('/search_apartment?q=' + encodeURIComponent(val));
+        const data = await res.json();
+        // 중복 선택 방지: 기존 리스트 비움
+        autocomplete.innerHTML = '';
+        data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'autocomplete-item';
+            div.textContent = item.name;
+            div.onclick = () => selectApartment(item);
+            autocomplete.appendChild(div);
+        });
+    });
+
+    // 아파트명 선택 → 동(블록) 선택 UI
+    async function selectApartment(item) {
+        aptInput.value = item.name;
+        autocomplete.innerHTML = '';
+        resultArea.innerHTML = '';
+        selectedAptCode = item.code;
+        const res = await fetch('/get_blocks?kapt_code=' + encodeURIComponent(selectedAptCode));
+        const blocks = await res.json();
+        if (blocks.length === 0) {
+            blockArea.innerHTML = "<span>동/블록 정보가 없습니다.</span>";
+            return;
+        }
+        let html = '<h4>동(블록) 선택</h4><select id="blockSelect">';
+        blocks.forEach(b => {
+            // 동 이름, 방향, 법정동명 data-dong에 포함
+            html += `<option value="${b.block}" data-direction="${b.direction}" data-dong="${b.dong}">${b.block} / ${b.direction}</option>`;
+        });
+        html += '</select>';
+        html += '<input type="number" id="floorInput" placeholder="층수 입력" min="1" max="50" style="width:80px;">';
+        html += '<button id="analyzeBtn">일사량 분석</button>';
+        blockArea.innerHTML = html;
+        document.getElementById('analyzeBtn').onclick = analyzeSolar;
+    }
+
+    // 분석 버튼 클릭
+    async function analyzeSolar() {
+        const blockSelect = document.getElementById('blockSelect');
+        const selectedOption = blockSelect.options[blockSelect.selectedIndex];
+        const block = selectedOption.value;
+        const direction = selectedOption.getAttribute('data-direction');
+        const dong = selectedOption.getAttribute('data-dong'); // DB에서 조회된 법정동명
+        const floor = document.getElementById('floorInput').value;
+        if (!floor || isNaN(floor) || floor < 1) {
+            alert("층수를 입력하세요!");
+            return;
+        }
+        resultArea.innerHTML = "<span>분석 중입니다...</span>";
+        const res = await fetch('/analyze_solar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                apt_code: selectedAptCode,
+                block: block,
+                floor: floor,
+                direction: direction,
+                dong: dong // dong은 반드시 전송!
+            })
+        });
+        const result = await res.json();
+        resultArea.innerHTML =
+            `<h4>분석 결과</h4>
+             <pre style="font-size:1em">${result.message || ''}</pre>
+             <img src="${result.img_url}" style="max-width:90%;border:1px solid #ccc;">
+             <h4>오늘의 날씨(예측 6시간)</h4>
+             <pre style="font-size:1em">${result.weather_message || '날씨 정보 없음'}</pre>
+             <h4>오늘의 대기질</h4>
+             <pre style="font-size:1em">${result.air_message || '대기질 정보 없음'}</pre>
+            `;
+    }
+</script>
+</body>
+</html>

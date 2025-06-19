@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <title>VWorld 3D 일조량 분석 (WebGL 3.0)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- WebGL 3.0 API -->
+    <script type="text/javascript"
+            src="https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey=59E8E97C-1463-372A-9540-000DB836F45D&domain=localhost"></script>
+    <!--  일조량 분석 기능 -->
+    <script type="text/javascript"
+            src="https://map.vworld.kr/js/dtkmap/tool3d/libapis/sunlight/sunlight_analysis_api.min.js"></script>
+
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
+        #vmap { width: 60%; height: 70%; }
+        .controls {
+          height: 80px;
+          padding: 10px;
+          background: #f0f0f0;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-family: sans-serif;
+        }
+        input[type="number"] {
+          width: 60px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="vmap"></div>
+
+<button id="btnMyHome" class="btn btn-primary">내 집 위치로 이동</button>
+
+<!-- ▼ 추가: 검색 영역 -->
+<div class="search-bar" style="margin:8px;">
+    <input type="text" id="aptName" placeholder="아파트명 입력" style="width:140px;">
+    <select id="aptBlock">
+        <option value="">동 선택</option>
+    </select>
+    <button type="button" id="searchBtn">검색</button>
+</div>
+
+<button id="btnPoint" class="btn btn-primary">일조량 지점선택</button>
+<br><br>
+
+<form class="field" id="frmSetList">
+    <div class="" id="toolbar">
+        <dl>
+            <dt>분석날짜</dt>
+            <dd><label for="anaDate"></label><input type="text" id="anaDate" name="anaDate" class="input date"
+                                                    data-bind="value: contourDate, valueUpdate: 'input'"
+                                                    onchange="sunlightAnalysis.createSunObject()" valCheck="date"
+                                                    fieldTitle="분석날짜"/></dd>
+            <dt>시간별 태양위치</dt>
+            <dd>
+                <div class="range">
+                    <label for="anaTim"><span style="float: left; width:15px; text-align:right;" id="time_span"
+                                              data-bind="text: contourTime"></span>: 00</label>
+                    <input type="range" id="anaTim" name="anaTim" class="form-control-range" min="5.0" max="20.0"
+                           step="1"
+                           data-bind="value: contourTime, valueUpdate: 'input'"
+                           onchange="sunlightAnalysis.createSunObject()"/>
+                </div>
+            </dd>
+            <dt>분석시간범위</dt>
+            <dd>
+                <label for="anaStTime"></label>
+                <select class="select" style="width: auto;" id="anaStTime"
+                        onchange="sunlightAnalysis.anaTimeCheck(this.value, document.getElementById('anaEdTime').value)"></select>
+                ~ <label for="anaEdTime"></label><select class="select" style="width: auto;" id="anaEdTime"
+                                                         onchange="sunlightAnalysis.anaTimeCheck(document.getElementById('anaStTime').value, this.value)"></select>
+            </dd>
+            <dt>분석시간간격</dt>
+            <dd>
+                <label for="anlysTimeInterval" style="width: 150px;"></label>
+                <select class="form-control" id="anlysTimeInterval">
+                    <option value="15">15분</option>
+                    <option value="10">10분</option>
+                    <option value="5">5분</option>
+                    <option value="1">1분</option>
+                </select></dd>
+        </dl>
+    </div>
+</form>
+<br>
+<button id="runAnlys" class="btn btn-primary">분석 수행</button>
+<br>
+
+<script type="text/javascript">
+    const userLat = {{ userLat }};
+  const userLng = {{ userLng }};
+  const userAptName = {{ userAptName | tojson }};
+
+function vwmap(){
+  var options = {
+    mapId : "vmap",
+    initPosition: new vw.CameraPosition(
+      new vw.CoordZ(127.3845,36.3504,500),
+      new vw.Direction(0, -90, 0)
+    ),
+    logo: true,
+    navigation: true
+  };
+  window.map = new vw.Map();
+  map.setOption(options);
+  map.start();
+}
+vwmap();
+
+// 👇 내 집 위치로 이동/마커 찍기 버튼 이벤트
+document.getElementById("btnMyHome").addEventListener("click", function() {
+  if (userLat && userLng) {
+    map.moveTo(new vw.CameraPosition(
+      new vw.CoordZ(userLng, userLat, 300),
+      new vw.Direction(0, -90, 0)
+    ));
+    // 기존 마커 있으면 지우기
+    if (window.myHomeMarker) {
+      map.removeObject(window.myHomeMarker);
+    }
+    const userPt = new vw.geom.Point(new vw.Coord(Number(userLng), Number(userLat)));
+    userPt.setImage("https://map.vworld.kr/images/op02/map_point.png");
+    userPt.setName(userAptName + " (내 위치)");
+    userPt.setFont("고딕");
+    userPt.setFontSize(14);
+    userPt.create();
+    window.myHomeMarker = userPt;
+  }
+});
+
+document.querySelector('#btnPoint').addEventListener("click", function() {
+  sunlightAnalysis.drawPointOnMap();
+});
+
+document.querySelector('#runAnlys').addEventListener("click", function() {
+  let interval = parseInt(document.getElementById('anlysTimeInterval').value);
+  let stTime = parseInt(document.getElementById('anaStTime').value)+1;
+  let endTime = parseInt(document.getElementById('anaEdTime').value);
+  sunlightAnalysis.runSunlight(interval, stTime, endTime, function(ResultInfo){
+    console.log("성공 : " + "clickeddata.selected");
+    console.log(ResultInfo);
+  });
+});
+
+document.getElementById("searchBtn").addEventListener("click", function(){
+  const aptName = document.getElementById("aptName").value.trim();
+  const aptBlock = document.getElementById("aptBlock").value;
+  if (!aptName) return alert("아파트명을 입력하세요!");
+
+  fetch("/search_address", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ name: aptName, block: aptBlock })
+  })
+  .then(res=>res.json())
+  .then(data=>{
+    if(data.success){
+      const lat = data.latitude, lng = data.longitude;
+      map.moveTo(new vw.CameraPosition(
+        new vw.CoordZ(lng, lat, 500),
+        new vw.Direction(0, -90, 0)
+      ));
+      let pt = new vw.geom.Point(new vw.Coord(lng, lat));
+      pt.setImage("https://map.vworld.kr/images/op02/map_point.png");
+      pt.setName(data.apartment_name);
+      pt.setFont("고딕");
+      pt.setFontSize(14);
+      pt.create();
+    }else{
+      alert("검색 결과 없음");
+    }
+  });
+});
+
+document.getElementById("aptName").addEventListener("change", function(){
+  const aptName = this.value.trim();
+  if(!aptName) return;
+  fetch("/get_blocks?apt_name=" + encodeURIComponent(aptName))
+    .then(res=>res.json())
+    .then(data=>{
+
+     data.sort((a, b) => {
+      const numA = parseInt(a, 10);
+      const numB = parseInt(b, 10);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA - numB;
+      } else {
+        return a.localeCompare(b, 'ko');
+      }
+    });
+
+      const $block = document.getElementById("aptBlock");
+      $block.innerHTML = '<option value="">동 선택</option>';
+      data.forEach(block => {
+        $block.innerHTML += `<option value="${block}">${block}</option>`;
+      });
+    });
+});
+</script>
+
+<!-- jQuery, jQuery UI CDN 포함(필수) -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+<!-- **자동완성만 별도 script로** -->
+<script type="text/javascript">
+    $(function() {
+      $("#aptName").autocomplete({
+        source: function(req, res) {
+          $.ajax({
+            url: "/autocomplete_name",
+            dataType: "json",
+            data: { term: req.term },
+            success: function(data) { res(data); }
+          });
+        },
+        minLength: 1,
+        select: function(event, ui) {
+          $("#aptName").val(ui.item.value);
+          fetch("/get_blocks?apt_name=" + encodeURIComponent(ui.item.value))
+            .then(res=>res.json())
+            .then(data=>{
+              const $block = document.getElementById("aptBlock");
+              $block.innerHTML = '<option value="">동 선택</option>';
+              data.forEach(block => {
+                $block.innerHTML += `<option value="${block}">${block}</option>`;
+              });
+            });
+          return false;
+        }
+      });
+    });
+</script>
+
+</body>
+</html>
