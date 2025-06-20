@@ -9,13 +9,40 @@
         .autocomplete-item:hover { background: #e0e0ff; }
         #resultArea img { margin-top: 20px; }
         pre { font-family: 'Malgun Gothic', 'monospace'; }
+        .weather-table {
+            border-collapse: collapse;
+            margin: 8px 0 14px 0;
+            width: 100%;
+            max-width: 850px;
+            min-width: 340px;
+            font-size: 0.97em;
+        }
+        .weather-table th, .weather-table td {
+            padding: 5px 8px;
+        }
+        .weather-table th {
+            background: #e9f3ff; color: #003262;
+        }
+        .weather-table tr:nth-child(even) {
+            background: #fafdff;
+        }
+        .weather-table .sunny { color: #f7b90d; font-weight: bold; }
+        .weather-table .cloud { color: #4a7db8; font-weight: bold; }
+        .weather-table .rain { color: #3285ff; font-weight: bold; }
+        .weather-table .snow { color: #85bcff; font-weight: bold; }
+        .weather-table .hazy { color: #999; }
     </style>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 <h3>아파트명 검색</h3>
 <input type="text" id="aptInput" autocomplete="off" placeholder="아파트명을 입력하세요" style="width:250px;">
 <div id="autocomplete" class="autocomplete-list"></div>
 <div id="blockArea"></div>
+<div style="width: 100%; max-width: 850px; margin: 20px 0;">
+    <canvas id="solarChart"></canvas>
+</div>
 <div id="resultArea"></div>
 
 <script>
@@ -24,18 +51,19 @@
     const blockArea = document.getElementById('blockArea');
     const resultArea = document.getElementById('resultArea');
     let selectedAptCode = null;
+    let solarChartObj = null;
 
-    // 자동완성 아파트명 검색
+    // 아파트 자동완성
     aptInput.addEventListener('input', async function() {
         const val = this.value.trim();
         autocomplete.innerHTML = '';
         blockArea.innerHTML = '';
         resultArea.innerHTML = '';
+        if (solarChartObj) solarChartObj.destroy();
         selectedAptCode = null;
         if (val.length < 1) return;
         const res = await fetch('/search_apartment?q=' + encodeURIComponent(val));
         const data = await res.json();
-        // 중복 선택 방지: 기존 리스트 비움
         autocomplete.innerHTML = '';
         data.forEach(item => {
             const div = document.createElement('div');
@@ -46,11 +74,11 @@
         });
     });
 
-    // 아파트명 선택 → 동(블록) 선택 UI
     async function selectApartment(item) {
         aptInput.value = item.name;
         autocomplete.innerHTML = '';
         resultArea.innerHTML = '';
+        if (solarChartObj) solarChartObj.destroy();
         selectedAptCode = item.code;
         const res = await fetch('/get_blocks?kapt_code=' + encodeURIComponent(selectedAptCode));
         const blocks = await res.json();
@@ -60,7 +88,6 @@
         }
         let html = '<h4>동(블록) 선택</h4><select id="blockSelect">';
         blocks.forEach(b => {
-            // 동 이름, 방향, 법정동명 data-dong에 포함
             html += `<option value="${b.block}" data-direction="${b.direction}" data-dong="${b.dong}">${b.block} / ${b.direction}</option>`;
         });
         html += '</select>';
@@ -70,19 +97,20 @@
         document.getElementById('analyzeBtn').onclick = analyzeSolar;
     }
 
-    // 분석 버튼 클릭
+    // "일사량 분석" 버튼 클릭 시 Chart.js로 그리기
     async function analyzeSolar() {
         const blockSelect = document.getElementById('blockSelect');
         const selectedOption = blockSelect.options[blockSelect.selectedIndex];
         const block = selectedOption.value;
         const direction = selectedOption.getAttribute('data-direction');
-        const dong = selectedOption.getAttribute('data-dong'); // DB에서 조회된 법정동명
+        const dong = selectedOption.getAttribute('data-dong');
         const floor = document.getElementById('floorInput').value;
         if (!floor || isNaN(floor) || floor < 1) {
             alert("층수를 입력하세요!");
             return;
         }
         resultArea.innerHTML = "<span>분석 중입니다...</span>";
+        if (solarChartObj) solarChartObj.destroy();
         const res = await fetch('/analyze_solar', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -91,19 +119,133 @@
                 block: block,
                 floor: floor,
                 direction: direction,
-                dong: dong // dong은 반드시 전송!
+                dong: dong
             })
         });
         const result = await res.json();
-        resultArea.innerHTML =
-            `<h4>분석 결과</h4>
-             <pre style="font-size:1em">${result.message || ''}</pre>
-             <img src="${result.img_url}" style="max-width:90%;border:1px solid #ccc;">
-             <h4>오늘의 날씨(예측 6시간)</h4>
-             <pre style="font-size:1em">${result.weather_message || '날씨 정보 없음'}</pre>
-             <h4>오늘의 대기질</h4>
-             <pre style="font-size:1em">${result.air_message || '대기질 정보 없음'}</pre>
-            `;
+        // Chart.js로 데이터 시각화
+        const xs = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => line.split('\t')[0]);
+        const baseSolar = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => Number(line.split('\t')[2])); // "기본 일사량" (3번째)
+        const finalSolar = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => Number(line.split('\t')[4])); // "최종 보정 일사량" (5번째)
+        const dry = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => line.split('\t')[5]);
+
+        const ctx = document.getElementById('solarChart').getContext('2d');
+        solarChartObj = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: xs,
+                datasets: [
+                    {
+                        label: '기본 일사량 (W/㎡)',
+                        data: baseSolar,
+                        fill: false,
+                        borderColor: '#aaa',
+                        backgroundColor: '#aaa',
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        tension: 0.2,
+                        borderDash: [6, 4],
+                    },
+                    {
+                        label: '최종 보정 일사량 (W/㎡)',
+                        data: finalSolar,
+                        fill: false,
+                        borderColor: '#0078FF',
+                        backgroundColor: '#0078FF',
+                        pointRadius: 7,
+                        pointHoverRadius: 10,
+                        tension: 0.2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: true },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            title: ctx => `${ctx[0].label}`,
+                            label: ctx => {
+                                let line = `${ctx.dataset.label}: ${ctx.parsed.y} W/㎡`;
+                                if (ctx.datasetIndex === 1) {
+                                    line += ` (건조 적합도: ${dry[ctx.dataIndex]})`;
+                                }
+                                return line;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: '일사량 (W/㎡)' } }
+                }
+            }
+        });
+
+        // 결과 표, 날씨, 대기질은 아래에 그대로!
+        resultArea.innerHTML = `
+            <h4>오늘의 날씨(예측 6시간)</h4>
+            ${renderWeatherTable(result.weather_message || '날씨 정보 없음')}
+            <h4>오늘의 대기질</h4>
+            <pre>${result.air_message || '대기질 정보 없음'}</pre>
+        `;
+    }
+
+    // 날씨 상태 → 이모지/컬러 매핑
+    function weatherIcon(cell) {
+        if(cell.includes("맑음")) return `<span class="sunny">☀️ 맑음</span>`;
+        if(cell.includes("흐림")) return `<span class="cloud">☁️ 흐림</span>`;
+        if(cell.includes("구름")) return `<span class="cloud">⛅ 구름많음</span>`;
+        if(cell.includes("비") && !cell.includes("없음")) return `<span class="rain">🌧️ 비</span>`;
+        if(cell.includes("눈")) return `<span class="snow">❄️ 눈</span>`;
+        return `<span class="hazy">${cell}</span>`;
+    }
+
+    // 날씨 표 자동 변환 함수
+    function renderWeatherTable(weather_message) {
+        const lines = weather_message.trim().split('\n');
+        if (lines.length < 2) return '<span>날씨 정보 없음</span>';
+        let table = '<table class="weather-table">';
+        lines.forEach((line, i) => {
+            const cells = line.split('\t');
+            table += '<tr>';
+            cells.forEach((cell, j) => {
+                if(i === 0) {
+                    table += `<th>${cell}</th>`;
+                }
+                else if(j === 1) { // 예보타입 (실황/초단기예보)
+                    if(cell.includes('실황')) table += `<td style="background:#e3fae5;color:#217943;font-weight:bold;">${cell}</td>`;
+                    else if(cell.includes('초단기')) table += `<td style="background:#e6f4ff;color:#2261ae;font-weight:bold;">${cell}</td>`;
+                    else table += `<td>${cell}</td>`;
+                }
+                // '하늘' or '강수' 열이면 이모지+색상
+                else if(j === 5) table += `<td>${weatherIcon(cell)}</td>`;
+                else if(j === 6) table += `<td>${weatherIcon(cell)}</td>`;
+                else table += `<td>${cell}</td>`;
+            });
+            table += '</tr>';
+        });
+        table += '</table>';
+        // 하단 설명 - 단기예보 설명 제거!
+        table += `<div style="font-size:0.92em;margin:8px 0 0 3px;color:#888;">
+            <span style="background:#e3fae5;padding:1px 7px;border-radius:6px;">초단기실황</span>
+            : 관측값, 현재 시각 이전 /
+            <span style="background:#e6f4ff;padding:1px 7px;border-radius:6px;">초단기예보</span>
+            : 1시간 간격 예측(6시간 이내, 파란배경)
+        </div>`;
+        return table;
     }
 </script>
 </body>
