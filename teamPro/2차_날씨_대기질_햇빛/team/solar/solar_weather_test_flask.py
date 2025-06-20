@@ -2,7 +2,7 @@ import cx_Oracle
 import numpy as np
 import pytz
 from flask import Flask, request, render_template, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import requests
 from pysolar.solar import get_altitude, get_azimuth
 from pysolar.radiation import get_radiation_direct
@@ -26,7 +26,7 @@ EXCEL_AIR = "tm_coords_from_api.csv"
 plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
-# 1. 아파트명 검색 (중복 없이)
+# 1. 아파트명 검색
 @app.route("/search_apartment")
 def search_apartment():
     word = request.args.get("q", "").strip()
@@ -78,7 +78,6 @@ def get_blocks():
         } for r in rows
     ])
 
-# 격자 변환, 날씨, 미세먼지 함수 생략(위 내용 그대로 사용)
 def latlon_to_xy(lat, lon):
     import math
     RE = 6371.00877; GRID = 5.0
@@ -102,7 +101,25 @@ def latlon_to_xy(lat, lon):
     y = ro - ra * math.cos(theta) + YO + 0.5
     return int(x), int(y)
 
-def get_weather_forecast(lat, lon):
+# 실황 요청 (각 시간별로 가장 가까운 과거 10분 단위 데이터)
+def get_ultra_srt_ncst(api_key, nx, ny, base_date, base_time):
+    url = (
+        f"https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtNcst"
+        f"?pageNo=1&numOfRows=1000&dataType=JSON"
+        f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
+        f"&authKey={api_key}"
+    )
+    items = []
+    try:
+        res = requests.get(url)
+        items = res.json()["response"]["body"]["items"]["item"]
+    except Exception:
+        pass
+    weather = {item["category"]: item["obsrValue"] for item in items}
+    return weather
+
+# 초단기예보(1시간 간격, 미래예측)
+def get_ultra_forecast(lat, lon):
     nx, ny = latlon_to_xy(lat, lon)
     now = datetime.now()
     base_date = now.strftime("%Y%m%d")
@@ -112,15 +129,19 @@ def get_weather_forecast(lat, lon):
         f"?pageNo=1&numOfRows=1000&dataType=JSON&base_date={base_date}&base_time={base_time}"
         f"&nx={nx}&ny={ny}&authKey={KMA_API_KEY}"
     )
-    response = requests.get(url)
-    items = response.json()["response"]["body"]["items"]["item"]
-    forecast = {}
+    items = []
+    try:
+        res = requests.get(url)
+        items = res.json()["response"]["body"]["items"]["item"]
+    except Exception:
+        pass
+    fcst = {}
     for item in items:
-        t, cat, val = item["fcstTime"], item["category"], item["fcstValue"]
-        if t not in forecast:
-            forecast[t] = {}
-        forecast[t][cat] = val
-    return forecast
+        t = item["fcstTime"]
+        if t not in fcst:
+            fcst[t] = {}
+        fcst[t][item["category"]] = item["fcstValue"]
+    return fcst
 
 def get_air_quality(dong_name):
     try:
@@ -191,13 +212,10 @@ def get_dry_label(val):
     elif val < 220: return "적합"
     else: return "매우 적합"
 
-# ★ 엣지(Edge) 가중치: 해가 뜨고 지는 시간에서만 층수 효과
 def edge_boost(hour, floor, edge_range=2, boost=0.2):
-    # edge_range: 몇 시간 범위에서 적용할지 (예: 4~6, 18~20시)
-    # boost: 층당 가중치
-    if hour <= 4 + edge_range:  # 일출 ~ edge 구간
+    if hour <= 4 + edge_range:
         return 1 + (floor - 1) * boost * (edge_range - (hour - 4)) / edge_range
-    elif hour >= 20 - edge_range:  # 일몰 직전 ~ edge 구간
+    elif hour >= 20 - edge_range:
         return 1 + (floor - 1) * boost * (edge_range - (20 - hour)) / edge_range
     else:
         return 1
@@ -225,8 +243,9 @@ def analyze_solar():
     lat, lon = float(row[0]), float(row[1])
     apt_azimuth = get_direction_angle(direction)
 
-    forecast = get_weather_forecast(lat, lon)
-    forecast_times = set(forecast.keys())
+    fcst = get_ultra_forecast(lat, lon)
+    nx, ny = latlon_to_xy(lat, lon)
+
     air_quality = get_air_quality(dong_name)
     pm10_val = air_quality["pm10_val"] if air_quality else None
     pm25_val = air_quality["pm25_val"] if air_quality else None
@@ -235,10 +254,25 @@ def analyze_solar():
     today = datetime.now().date()
     height = floor * 3
 
+    now = tz.localize(datetime.now())
     results = []
-    for h in range(4, 21):  # 4~20시, 1시간 간격
+
+    for h in range(5, 21):  # 4~20시, 1시간 간격
         m = 0
-        dt = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=h, minutes=m))
+        dt = tz.localize(datetime.combine(today, time(hour=h)))
+        t_str = f"{h:02d}00"
+        # ---- 실황: 그래프 시간 <= now (실황 데이터 10분단위 내림) ----
+        if dt <= now:
+            minute = (dt.minute // 10) * 10
+            base_time = dt.replace(minute=minute).strftime("%H%M")
+            base_date = dt.strftime("%Y%m%d")
+            weather = get_ultra_srt_ncst(KMA_API_KEY, nx, ny, base_date, base_time)
+            source = "초단기실황"
+        else:
+            # ---- 초단기예보: 그래프 시간 > now (1시간 단위) ----
+            weather = fcst.get(t_str, {})
+            source = "초단기예보"
+
         alt = get_altitude(lat, lon, dt)
         azi = get_azimuth(lat, lon, dt)
         raw_rad = get_radiation_direct(dt, alt) if alt > 0 else 0
@@ -247,23 +281,19 @@ def analyze_solar():
         angle_factor = correction_factor(azi, apt_azimuth)
         final_rad = attenuated * angle_factor
 
-        # 엣지(Edge) 효과 (아침·저녁에만 적용)
+        # 엣지 효과 (아침/저녁에만)
         if raw_rad > 0:
             final_rad *= edge_boost(h, floor, edge_range=2, boost=0.2)
 
-        t_str = f"{str(h).zfill(2)}{str(m).zfill(2)}"
-        weather = {}
         # 날씨 보정
-        if t_str in forecast_times:
-            weather = forecast[t_str]
-            sky = weather.get("SKY", "")
-            pty = weather.get("PTY", "")
-            if pty != "0":
-                final_rad = 0
-            elif sky == "4":
-                final_rad *= 0.6
-            elif sky == "3":
-                final_rad *= 0.9
+        temp = weather.get("T1H") or weather.get("TMP") or "?"
+        humi = weather.get("REH", "?")
+        wind = weather.get("WSD", "?")
+        pty = weather.get("PTY", "")
+        sky = weather.get("SKY", "")
+
+        if pty != "0" and pty != "":
+            final_rad = 0
 
         # 미세먼지 보정
         if pm10_val is not None and pm10_val > 80:
@@ -277,32 +307,38 @@ def analyze_solar():
 
         results.append({
             "시간": f"{h}:{str(m).zfill(2)}",
+            "타입": source,
             "기본 일사량": round(raw_rad, 2),
             "고도 보정": round(attenuated, 2),
             "최종 보정 일사량": round(final_rad, 2),
             "건조 적합도": get_dry_label(final_rad),
-            "기온(℃)": weather.get("T1H", "?"),
-            "습도(%)": weather.get("REH", "?"),
-            "풍속(m/s)": weather.get("WSD", "?"),
-            "하늘": {"1": "맑음", "3": "구름많음", "4": "흐림"}.get(weather.get("SKY", ""), "?"),
-            "강수": {"0": "없음", "1": "비", "2": "비/눈", "3": "눈", "4": "소나기"}.get(weather.get("PTY", ""), "?")
+            "기온(℃)": temp,
+            "습도(%)": humi,
+            "풍속(m/s)": wind,
+            "하늘": {"1": "맑음", "3": "구름많음", "4": "흐림"}.get(sky, "?"),
+            "강수": {"0": "없음", "1": "비", "2": "비/눈", "3": "눈", "4": "소나기"}.get(pty, "?")
         })
 
     # ---- 결과 표 ----
-    message = "시간\t기본 일사량\t고도 보정\t최종 보정 일사량\t건조 적합도\n"
+    message = "시간\t타입\t기본 일사량\t고도 보정\t최종 보정 일사량\t건조 적합도\n"
     for r in results:
-        message += f"{r['시간']}\t{r['기본 일사량']}\t{r['고도 보정']}\t{r['최종 보정 일사량']}\t{r['건조 적합도']}\n"
+        message += f"{r['시간']}\t{r['타입']}\t{r['기본 일사량']}\t{r['고도 보정']}\t{r['최종 보정 일사량']}\t{r['건조 적합도']}\n"
 
     # ---- 날씨 예보 표(예보 있는 시간만) ----
-    weather_message = "시간\t기온(℃)\t습도(%)\t풍속(m/s)\t하늘\t강수\n"
+    weather_message = f"[날씨 예보: {dong_name}]\n시간\t타입\t기온(℃)\t습도(%)\t풍속(m/s)\t하늘\t강수\n"
     for r in results:
         if r["기온(℃)"] != "?":
-            weather_message += f"{r['시간']}\t{r['기온(℃)']}\t{r['습도(%)']}\t{r['풍속(m/s)']}\t{r['하늘']}\t{r['강수']}\n"
+            weather_message += f"{r['시간']}\t{r['타입']}\t{r['기온(℃)']}\t{r['습도(%)']}\t{r['풍속(m/s)']}\t{r['하늘']}\t{r['강수']}\n"
 
     # ---- 대기질 표 ----
     air_message = ""
     if air_quality:
-        air_message += f"[대기질] {air_quality['station']}({air_quality['time']}) PM10: {air_quality['PM10']}, PM2.5: {air_quality['PM2.5']}, O3: {air_quality['O3']}\n"
+        air_message += (
+            f"[대기질] {air_quality['station']}({air_quality['time']})\n"
+            f"미세먼지: {air_quality['PM10']}\n"
+            f"초미세먼지: {air_quality['PM2.5']}\n"
+            f"오존: {air_quality['O3']}\n"
+        )
 
     # ---- 그래프 ----
     plt.figure(figsize=(13, 5))
