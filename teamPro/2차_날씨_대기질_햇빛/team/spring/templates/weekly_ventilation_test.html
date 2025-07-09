@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>주간 환기 데이터 테스트</title>
+    <style>
+        table { border-collapse: collapse; width: 90%; margin: 20px auto; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        h2 { text-align: center; }
+    </style>
+</head>
+<body>
+    <h2>주간 환기 데이터 테스트</h2>
+    <div style="text-align:center;">
+        <form action="/test_weekly_ventilation" method="get">
+            <input type="text" name="dong" placeholder="dong 이름 입력" required>
+            <button type="submit">조회</button>
+        </form>
+    </div>
+
+    {% if data %}
+    <table>
+        <thead>
+            <tr>
+                <th>날짜</th>
+                <th>평균기온(℃)</th>
+                <th>평균습도(%)</th>
+                <th>평균풍속(m/s)</th>
+                <th>날씨등급</th>
+                <th>날씨사유</th>
+                <th>대기질사유</th>
+                <th>최종추천</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in data %}
+            <tr>
+                <td>{{ row.date }}</td>
+                <td>{{ row.tempAvg }}</td>
+                <td>{{ row.humiAvg }}</td>
+                <td>{{ row.windAvg }}</td>
+                <td>{{ row.weatherGrade }}</td>
+                <td>{{ row.weatherReason }}</td>
+                <td>{{ row.dustReason }}</td>
+                <td>{{ row.finalRecommend }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</body>
+</html>

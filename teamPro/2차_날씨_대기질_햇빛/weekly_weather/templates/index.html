@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <title>아파트 일사량 분석</title>
+    <style>
+        .autocomplete-list { border: 1px solid #ccc; max-height: 160px; overflow-y: auto; }
+        .autocomplete-item { padding: 5px; cursor: pointer; }
+        .autocomplete-item:hover { background: #e0e0ff; }
+        #resultArea img { margin-top: 20px; }
+        pre { font-family: 'Malgun Gothic', 'monospace'; }
+        .weather-table {
+            border-collapse: collapse;
+            margin: 8px 0 14px 0;
+            width: 100%;
+            max-width: 850px;
+            min-width: 340px;
+            font-size: 0.97em;
+        }
+        .weather-table th, .weather-table td {
+            padding: 5px 8px;
+        }
+        .weather-table th {
+            background: #e9f3ff; color: #003262;
+        }
+        .weather-table tr:nth-child(even) {
+            background: #fafdff;
+        }
+        .weather-table .sunny { color: #f7b90d; font-weight: bold; }
+        .weather-table .cloud { color: #4a7db8; font-weight: bold; }
+        .weather-table .rain { color: #3285ff; font-weight: bold; }
+        .weather-table .snow { color: #85bcff; font-weight: bold; }
+        .weather-table .hazy { color: #999; }
+        /* 등급 컬러 */
+        .weather-table .grade-excellent { color: #006edc; font-weight:bold; }
+        .weather-table .grade-good { color: #23a931; font-weight:bold; }
+        .weather-table .grade-normal { color: #ca8602; }
+        .weather-table .grade-soso { color: #ab8c4b; }
+        .weather-table .grade-bad { color: #c90000; font-weight:bold; }
+        .weather-table .grade-worst { color: #910000; background:#ffdddd;font-weight:bold;}
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<h3>아파트명 검색</h3>
+<input type="text" id="aptInput" autocomplete="off" placeholder="아파트명을 입력하세요" style="width:250px;">
+<div id="autocomplete" class="autocomplete-list"></div>
+<div id="blockArea"></div>
+<div style="width: 100%; max-width: 850px; margin: 20px 0;">
+    <canvas id="solarChart"></canvas>
+</div>
+<div id="resultArea"></div>
+
+<div id="weeklyWeatherArea"></div>
+
+<div id="sampleWeeklyTable" style="margin-top:60px;"></div>
+
+<script>
+    const aptInput = document.getElementById('aptInput');
+    const autocomplete = document.getElementById('autocomplete');
+    const blockArea = document.getElementById('blockArea');
+    const resultArea = document.getElementById('resultArea');
+    let selectedAptCode = null;
+    let solarChartObj = null;
+
+    // 아파트 자동완성
+    aptInput.addEventListener('input', async function() {
+        const val = this.value.trim();
+        autocomplete.innerHTML = '';
+        blockArea.innerHTML = '';
+        resultArea.innerHTML = '';
+        if (solarChartObj) solarChartObj.destroy();
+        selectedAptCode = null;
+        if (val.length < 1) return;
+        const res = await fetch('/search_apartment?q=' + encodeURIComponent(val));
+        const data = await res.json();
+        autocomplete.innerHTML = '';
+        data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'autocomplete-item';
+            div.textContent = item.name;
+            div.onclick = () => selectApartment(item);
+            autocomplete.appendChild(div);
+        });
+    });
+
+    async function selectApartment(item) {
+        aptInput.value = item.name;
+        autocomplete.innerHTML = '';
+        resultArea.innerHTML = '';
+        if (solarChartObj) solarChartObj.destroy();
+        selectedAptCode = item.code;
+        const res = await fetch('/get_blocks?kapt_code=' + encodeURIComponent(selectedAptCode));
+        const blocks = await res.json();
+        if (blocks.length === 0) {
+            blockArea.innerHTML = "<span>동/블록 정보가 없습니다.</span>";
+            return;
+        }
+        let html = '<h4>동(블록) 선택</h4><select id="blockSelect">';
+        blocks.forEach(b => {
+            html += `<option value="${b.block}" data-direction="${b.direction}" data-dong="${b.dong}">${b.block} / ${b.direction}</option>`;
+        });
+        html += '</select>';
+        html += '<input type="number" id="floorInput" placeholder="층수 입력" min="1" max="50" style="width:80px;">';
+        html += '<button id="analyzeBtn">일사량 분석</button>';
+        blockArea.innerHTML = html;
+        document.getElementById('analyzeBtn').onclick = analyzeSolar;
+    }
+
+    // "일사량 분석" 버튼 클릭 시 Chart.js로 그리기
+    async function analyzeSolar() {
+        const blockSelect = document.getElementById('blockSelect');
+        const selectedOption = blockSelect.options[blockSelect.selectedIndex];
+        const block = selectedOption.value;
+        const direction = selectedOption.getAttribute('data-direction');
+        const dong = selectedOption.getAttribute('data-dong');
+        const floor = document.getElementById('floorInput').value;
+        if (!floor || isNaN(floor) || floor < 1) {
+            alert("층수를 입력하세요!");
+            return;
+        }
+        resultArea.innerHTML = "<span>분석 중입니다...</span>";
+        if (solarChartObj) solarChartObj.destroy();
+        const res = await fetch('/analyze_solar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                apt_code: selectedAptCode,
+                block: block,
+                floor: floor,
+                direction: direction,
+                dong: dong
+            })
+        });
+        const result = await res.json();
+        // Chart.js로 데이터 시각화
+        const xs = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => line.split('\t')[0]);
+        const baseSolar = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => Number(line.split('\t')[2])); // "기본 일사량" (3번째)
+        const finalSolar = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => Number(line.split('\t')[4])); // "최종 보정 일사량" (5번째)
+        const dry = result.message
+            .split('\n')
+            .filter(line => line && !line.startsWith('시간'))
+            .map(line => line.split('\t')[5]);
+
+        const ctx = document.getElementById('solarChart').getContext('2d');
+        solarChartObj = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: xs,
+                datasets: [
+                    {
+                        label: '기본 일사량 (W/㎡)',
+                        data: baseSolar,
+                        fill: false,
+                        borderColor: '#aaa',
+                        backgroundColor: '#aaa',
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        tension: 0.2,
+                        borderDash: [6, 4],
+                    },
+                    {
+                        label: '최종 보정 일사량 (W/㎡)',
+                        data: finalSolar,
+                        fill: false,
+                        borderColor: '#0078FF',
+                        backgroundColor: '#0078FF',
+                        pointRadius: 7,
+                        pointHoverRadius: 10,
+                        tension: 0.2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: true },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            title: ctx => `${ctx[0].label}`,
+                            label: ctx => {
+                                let line = `${ctx.dataset.label}: ${ctx.parsed.y} W/㎡`;
+                                if (ctx.datasetIndex === 1) {
+                                    line += ` (건조 적합도: ${dry[ctx.dataIndex]})`;
+                                }
+                                return line;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: '일사량 (W/㎡)' } }
+                }
+            }
+        });
+
+        // 결과 표, 날씨, 대기질은 아래에 그대로!
+        resultArea.innerHTML = `
+            <h4>오늘의 날씨(예측 6시간)</h4>
+            ${renderWeatherTable(result.weather_message || '날씨 정보 없음')}
+            <h4>오늘의 대기질</h4>
+            <pre>${result.air_message || '대기질 정보 없음'}</pre>
+        `;
+
+        const dongName = document.getElementById('blockSelect')
+    .selectedOptions[0]
+    .getAttribute('data-dong');
+const weeklyWeatherArea = document.getElementById('weeklyWeatherArea');
+weeklyWeatherArea.innerHTML = "<span>단기예보 불러오는 중...</span>";
+const weatherRes = await fetch('/api/weekly_weather?dong=' + encodeURIComponent(dongName));
+const weeklyData = await weatherRes.json();
+
+function renderWeeklyTable(arr) {
+    if (!arr || arr.length === 0) return "<span>예보 데이터 없음</span>";
+    let html = '<table class="weather-table">';
+    html += `<tr>
+        <th>날짜</th><th>시간</th><th>기온(℃)</th><th>습도(%)</th><th>풍속(m/s)</th>
+        <th>풍향</th><th>하늘</th><th>강수</th><th>환기추천</th><th>사유</th>
+    </tr>`;
+    arr.forEach(r => {
+        html += `<tr>
+            <td>${r["날짜"]}</td>
+            <td>${r["시간"]}</td>
+            <td>${r["기온(℃)"]}</td>
+            <td>${r["습도(%)"]}</td>
+            <td>${r["풍속(m/s)"]}</td>
+            <td>${r["풍향"]}</td>
+            <td>${weatherIcon(r["하늘"])}</td>
+            <td>${weatherIcon(r["강수"])}</td>
+            <td class="grade grade-${getGradeClass(r["환기추천"])}">${r["환기추천"]}</td>
+            <td>${r["환기추천사유"]}</td>
+        </tr>`;
+    });
+    html += "</table>";
+    html += `<div style="font-size:0.92em;margin:8px 0 0 3px;color:#888;">
+        <b>단기예보</b>: 3시간 간격, 최대 7일간 예보 (기온·습도·풍속·환기추천)
+    </div>`;
+    return html;
+}
+weeklyWeatherArea.innerHTML = "<h4>3시간 간격 단기예보</h4>" + renderWeeklyTable(weeklyData.weather_all);
+
+// 미세먼지 예보 표 추가!
+weeklyWeatherArea.innerHTML += "<h4>미세먼지 예보(환경부 API)</h4>" + renderDustForecastTable(weeklyData.dust_forecast);
+    }
+
+    // 등급별 컬러 클래스
+    function getGradeClass(text) {
+        if(!text) return '';
+        if(text.includes('매우 적합')) return 'excellent';
+        if(text.includes('적합')) return 'good';
+        if(text.includes('다소 적합')) return 'normal';
+        if(text.includes('다소 부적합')) return 'soso';
+        if(text.includes('부적합')) return 'bad';
+        if(text.includes('매우 부적합')) return 'worst';
+        return '';
+    }
+
+    // 날씨 상태 → 이모지/컬러 매핑
+    function weatherIcon(cell) {
+        if(cell.includes("맑음")) return `<span class="sunny">☀️ 맑음</span>`;
+        if(cell.includes("흐림")) return `<span class="cloud">☁️ 흐림</span>`;
+        if(cell.includes("구름")) return `<span class="cloud">⛅ 구름많음</span>`;
+        if(cell.includes("비") && !cell.includes("없음")) return `<span class="rain">🌧️ 비</span>`;
+        if(cell.includes("눈")) return `<span class="snow">❄️ 눈</span>`;
+        return `<span class="hazy">${cell}</span>`;
+    }
+
+    // 날씨 표 자동 변환 함수 (등급 컬럼 색상 강조)
+    function renderWeatherTable(weather_message) {
+        const lines = weather_message.trim().split('\n');
+        if (lines.length < 2) return '<span>날씨 정보 없음</span>';
+        let table = '<table class="weather-table">';
+        lines.forEach((line, i) => {
+            const cells = line.split('\t');
+            table += '<tr>';
+            cells.forEach((cell, j) => {
+                if(i === 0) {
+                    table += `<th>${cell}</th>`;
+                }
+                // 예보타입(실황/초단기예보)
+                else if(j === 1) {
+                    if(cell.includes('실황')) table += `<td style="background:#e3fae5;color:#217943;font-weight:bold;">${cell}</td>`;
+                    else if(cell.includes('초단기')) table += `<td style="background:#e6f4ff;color:#2261ae;font-weight:bold;">${cell}</td>`;
+                    else table += `<td>${cell}</td>`;
+                }
+                // 기온등급(j==3), 풍속등급(j==6)
+                else if(j === 3 || j === 6) {
+                    table += `<td class="grade grade-${getGradeClass(cell)}">${cell}</td>`;
+                }
+                // 하늘/강수(이모지)
+                else if(j === 7) table += `<td>${weatherIcon(cell)}</td>`;
+                else if(j === 8) table += `<td>${weatherIcon(cell)}</td>`;
+                // 나머지
+                else table += `<td>${cell}</td>`;
+            });
+            table += '</tr>';
+        });
+        table += '</table>';
+        // 하단 설명
+        table += `<div style="font-size:0.92em;margin:8px 0 0 3px;color:#888;">
+            <span style="background:#e3fae5;padding:1px 7px;border-radius:6px;">초단기실황</span>
+            : 관측값, 현재 시각 이전 /
+            <span style="background:#e6f4ff;padding:1px 7px;border-radius:6px;">초단기예보</span>
+            : 1시간 간격 예측(6시간 이내, 파란배경)
+        </div>`;
+        return table;
+    }
+
+</script>
+</body>
+</html>

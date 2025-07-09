@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>주간 환기/생활 추천</title>
+    <style>
+        body {
+            font-family: 'Malgun Gothic', sans-serif;
+            margin: 20px;
+            max-width: 900px;
+        }
+        input, button {
+            padding: 6px 10px;
+            font-size: 1em;
+            margin-right: 10px;
+        }
+        h2 {
+            color: #003262;
+        }
+        .weather-table {
+            border-collapse: collapse;
+            margin: 16px 0;
+            width: 100%;
+            font-size: 0.95em;
+        }
+        .weather-table th, .weather-table td {
+            padding: 6px 10px;
+            border: 1px solid #e6e6e6;
+            text-align: center;
+        }
+        .weather-table th {
+            background: #e9f3ff;
+            color: #003262;
+        }
+        .grade-excellent { color: #006edc; font-weight:bold; }
+        .grade-good { color: #23a931; font-weight:bold; }
+        .grade-normal { color: #ca8602; }
+        .grade-bad { color: #c90000; font-weight:bold; }
+
+        #weeklyTableArea {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h2>주간 환기/생활 추천 가이드</h2>
+
+    <input type="text" id="dongInput" placeholder="법정동명(예: 갈마동)" style="width:150px;" />
+    <button id="fetchBtn">조회</button>
+
+    <div id="weeklyTableArea"></div>
+
+<script>
+    function getGradeClass(text) {
+        if(!text) return '';
+        if(text.includes('매우 추천')) return 'excellent';
+        if(text.includes('추천')) return 'good';
+        if(text.includes('보통')) return 'normal';
+        if(text.includes('비추천')) return 'bad';
+        return '';
+    }
+
+    document.getElementById('fetchBtn').onclick = async function() {
+        const dong = document.getElementById('dongInput').value.trim();
+        if (!dong) {
+            alert("동(법정동명)을 입력하세요!");
+            return;
+        }
+        document.getElementById('weeklyTableArea').innerHTML = "불러오는 중...";
+
+        try {
+            const res = await fetch('/api/weekly_weather?dong=' + encodeURIComponent(dong));
+            const data = await res.json();
+            const arr = data.weatherAll || [];
+
+            if(arr.length === 0) {
+                document.getElementById('weeklyTableArea').innerHTML = "<p>데이터가 없습니다.</p>";
+                return;
+            }
+
+            let html = '<table class="weather-table">';
+            html += `<thead><tr>
+                <th>날짜</th><th>시간</th><th>기온(℃)</th><th>습도(%)</th>
+                <th>풍속(m/s)</th><th>풍향</th><th>하늘</th><th>강수</th>
+                <th>환기추천</th><th>사유</th><th>미세먼지 예보</th>
+            </tr></thead><tbody>`;
+            arr.forEach(r => {
+                html += `<tr>
+                    <td>${r.date || ""}</td>
+                    <td>${r.time || ""}</td>
+                    <td>${r.temperature || ""}</td>
+                    <td>${r.humidity || ""}</td>
+                    <td>${r.windSpeed || ""}</td>
+                    <td>${r.windDirection || ""}</td>
+                    <td>${r.sky || ""}</td>
+                    <td>${r.precipitation || ""}</td>
+                    <td class="grade-${getGradeClass(r.ventRecommend)}">${r.ventRecommend || ""}</td>
+                    <td>${r.ventReason || ""}</td>
+                    <td>${r.dustGrade || ""}</td>
+                </tr>`;
+            });
+            html += "</tbody></table>";
+            document.getElementById('weeklyTableArea').innerHTML = html;
+
+        } catch (e) {
+            document.getElementById('weeklyTableArea').innerHTML = "<p>데이터를 불러오는 중 오류가 발생했습니다.</p>";
+            console.error(e);
+        }
+    }
+</script>
+</body>
+</html>

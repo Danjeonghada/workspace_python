@@ -4,21 +4,25 @@
     <meta charset="UTF-8"/>
     <title>아파트 일사량 분석</title>
     <style>
+        body {
+            font-family: 'Malgun Gothic', sans-serif;
+        }
         .autocomplete-list { border: 1px solid #ccc; max-height: 160px; overflow-y: auto; }
         .autocomplete-item { padding: 5px; cursor: pointer; }
         .autocomplete-item:hover { background: #e0e0ff; }
         #resultArea img { margin-top: 20px; }
         pre { font-family: 'Malgun Gothic', 'monospace'; }
+
         .weather-table {
             border-collapse: collapse;
             margin: 8px 0 14px 0;
             width: 100%;
-            max-width: 850px;
-            min-width: 340px;
-            font-size: 0.97em;
+            max-width: 750px; /* 표 최대 너비 더 줄임 */
+            min-width: 300px;
+            font-size: 0.9em; /* 폰트 크기 약간 더 줄임 */
         }
         .weather-table th, .weather-table td {
-            padding: 5px 8px;
+            padding: 3px 6px; /* 셀 패딩 더 줄임 */
         }
         .weather-table th {
             background: #e9f3ff; color: #003262;
@@ -31,8 +35,48 @@
         .weather-table .rain { color: #3285ff; font-weight: bold; }
         .weather-table .snow { color: #85bcff; font-weight: bold; }
         .weather-table .hazy { color: #999; }
+
+        /* 대기질 표 스타일 */
+        .air-quality-table {
+            width: 100%;
+            max-width: 750px; /* 표 최대 너비 더 줄임 */
+            border-collapse: collapse;
+            margin-top: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 0.9em; /* 전체 폰트 크기 약간 더 줄임 */
+        }
+
+        .air-quality-table thead th {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px 10px; /* 헤더 패딩 더 줄임 */
+            text-align: center;
+            font-weight: bold;
+            border: none;
+        }
+        .air-quality-table tbody tr {
+            background-color: #f7fff7;
+        }
+        .air-quality-table tbody td {
+            padding: 7px 9px; /* 셀 패딩 더 줄임 */
+            border: 1px solid #e0e0e0;
+            text-align: center; /* 모든 셀 내용 가운데 정렬 */
+            color: #333;
+        }
+        .air-quality-table tbody tr td:first-child {
+            background-color: #e9f3ff;
+            font-weight: bold;
+            color: #003262;
+        }
+        /* 두 번째 td는 이제 기본 text-align: center를 따릅니다. */
+        /* 세 번째 td (환기 적합도)도 기본 text-align: center를 따릅니다. */
+        .air-quality-table tbody tr td:last-child {
+            font-weight: bold;
+            color: #007bff;
+        }
     </style>
-    <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -40,7 +84,7 @@
 <input type="text" id="aptInput" autocomplete="off" placeholder="아파트명을 입력하세요" style="width:250px;">
 <div id="autocomplete" class="autocomplete-list"></div>
 <div id="blockArea"></div>
-<div style="width: 100%; max-width: 850px; margin: 20px 0;">
+<div style="width: 100%; max-width: 750px; margin: 20px 0;">
     <canvas id="solarChart"></canvas>
 </div>
 <div id="resultArea"></div>
@@ -60,6 +104,7 @@
         blockArea.innerHTML = '';
         resultArea.innerHTML = '';
         if (solarChartObj) solarChartObj.destroy();
+        solarChartObj = null; // 차트 객체 초기화
         selectedAptCode = null;
         if (val.length < 1) return;
         const res = await fetch('/search_apartment?q=' + encodeURIComponent(val));
@@ -79,6 +124,7 @@
         autocomplete.innerHTML = '';
         resultArea.innerHTML = '';
         if (solarChartObj) solarChartObj.destroy();
+        solarChartObj = null; // 차트 객체 초기화
         selectedAptCode = item.code;
         const res = await fetch('/get_blocks?kapt_code=' + encodeURIComponent(selectedAptCode));
         const blocks = await res.json();
@@ -111,6 +157,8 @@
         }
         resultArea.innerHTML = "<span>분석 중입니다...</span>";
         if (solarChartObj) solarChartObj.destroy();
+        solarChartObj = null; // 차트 객체 초기화
+
         const res = await fetch('/analyze_solar', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -123,6 +171,7 @@
             })
         });
         const result = await res.json();
+
         // Chart.js로 데이터 시각화
         const xs = result.message
             .split('\n')
@@ -199,7 +248,7 @@
             <h4>오늘의 날씨(예측 6시간)</h4>
             ${renderWeatherTable(result.weather_message || '날씨 정보 없음')}
             <h4>오늘의 대기질</h4>
-            <pre>${result.air_message || '대기질 정보 없음'}</pre>
+            ${result.air_message || '대기질 정보 없음'}
         `;
     }
 
